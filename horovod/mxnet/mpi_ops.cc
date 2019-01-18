@@ -291,6 +291,9 @@ extern "C" int horovod_mxnet_broadcast_async(NDArray* input, NDArray* output,
   };
 
 #if HAVE_CUDA && HOROVOD_GPU_BROADCAST != 'M'
+  // TODO: 1) refactor all operations to perform CudaOnCPU correctly
+  // TODO: 2) potentially remove MXReadyEvent if it's not needed
+  // TODO: 3) add ability to discover HAVE_CUDA w/o HOROVOD_GPU_XXX specified
   ThrowIfError(common::CheckInitialized());
   // Make async copy of input tensor to CPU tensor and record completion event.
   auto hvd_cpu_buffer = std::make_shared<MXTemporaryBuffer<NDArray>>(
