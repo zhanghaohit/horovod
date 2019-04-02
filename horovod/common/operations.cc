@@ -40,6 +40,7 @@
 #include "parameter_manager.h"
 #include "timeline.h"
 #include "logging.h"
+#include "net.h"
 
 #if HAVE_CUDA
 #include "ops/cuda_operations.h"
@@ -1340,6 +1341,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 // Start Horovod background thread. Ensure that this is
 // only done once no matter how many times this function is called.
 void InitializeHorovodOnce(const int* ranks, int nranks) {
+  SocketCommunicator comm;
   // Ensure background thread is only started once.
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {
