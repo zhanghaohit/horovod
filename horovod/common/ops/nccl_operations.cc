@@ -37,6 +37,24 @@ ncclDataType_t GetNCCLDataType(const std::shared_ptr<Tensor> tensor) {
   }
 }
 
+int GetSizeof(const std::shared_ptr<Tensor> &tensor) {
+  switch (tensor->dtype()) {
+    case HOROVOD_INT32:
+      return 4;
+    case HOROVOD_INT64:
+      return 8;
+    case HOROVOD_FLOAT16:
+      return 2;
+    case HOROVOD_FLOAT32:
+      return 4;
+    case HOROVOD_FLOAT64:
+      return 8;
+    default:
+      throw std::logic_error("Type " + DataType_Name(tensor->dtype()) +
+                             " is not supported in NCCL mode.");
+  }
+}
+
 void NCCLContext::ErrorCheck(std::string op_name, ncclResult_t nccl_result) {
   if (nccl_result != ncclSuccess) {
     throw std::logic_error(std::string(op_name) + " failed: " + ncclGetErrorString(nccl_result));
@@ -52,12 +70,19 @@ void NCCLContext::ShutDown(){
 
 NCCLAllreduce::NCCLAllreduce(NCCLContext* nccl_context,
                              MPIContext* mpi_context,
+                             SocketContext* net_context,
                              CUDAContext* cuda_context,
                              HorovodGlobalState* global_state)
-    : CUDAAllreduce(cuda_context, global_state),
-      nccl_context_(nccl_context), mpi_context_(mpi_context) {}
+    : CUDAAllreduce(cuda_context, global_state), NCCLOp(nccl_context, net_context, global_state) {
+#if !DYNAMIC_SCHEDULE
+  mpi_context_ = mpi_context;
+  assert(net_context_ == nullptr);
+  assert(mpi_context_ != nullptr);
+#endif
+}
 
 Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "NCCLAllreduce";
   auto& first_entry = entries[0];
 
   InitCUDA(entries);
@@ -108,12 +133,12 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Resp
   return FinalizeCUDAQueue(entries);
 }
 
-void NCCLAllreduce::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
+void NCCLOp::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
                                  const std::vector<int32_t>& nccl_device_map) {
   // Ensure NCCL communicator is in the map before executing reduction.
   ncclComm_t& nccl_comm = nccl_context_->nccl_comms[nccl_device_map];
   if (nccl_comm == nullptr) {
-    auto& timeline = global_state_->timeline;
+    auto& timeline = global_state_nccl_->timeline;
     timeline.ActivityStartAll(entries, INIT_NCCL);
 
     int nccl_rank, nccl_size;
@@ -125,11 +150,15 @@ void NCCLAllreduce::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
       nccl_context_->ErrorCheck("ncclGetUniqueId", ncclGetUniqueId(&nccl_id));
     }
 
+#if DYNAMIC_SCHEDULE
+    int bcast_op = net_context_->comm.Bcast(&nccl_id, sizeof(nccl_id));
+#else
     int bcast_op = MPI_Bcast((void*) &nccl_id,
                              sizeof(nccl_id),
                              mpi_context_->GetMPIDataType(HOROVOD_BYTE),
                              0,
                              mpi_context_->GetMPICommunicator(nccl_id_bcast_comm));
+#endif
     if (bcast_op != MPI_SUCCESS) {
       throw std::logic_error("MPI_Broadcast failed, see MPI output for details.");
     }
@@ -141,7 +170,11 @@ void NCCLAllreduce::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
 
     // Barrier helps NCCL to synchronize after initialization and avoid
     // deadlock that we've been seeing without it.
+#if DYNAMIC_SCHEDULE
+    int barrier_op = net_context_->comm.Barrier();
+#else
     int barrier_op = MPI_Barrier(mpi_context_->GetMPICommunicator(Communicator::GLOBAL));
+#endif
     if (barrier_op != MPI_SUCCESS) {
       throw std::logic_error("MPI_Barrier failed, see MPI output for details.");
     }
@@ -152,19 +185,67 @@ void NCCLAllreduce::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
   nccl_comm_ = &nccl_comm;
 }
 
-void NCCLAllreduce::PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
+void NCCLOp::PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
                                              Communicator& nccl_id_bcast_comm) {
-  nccl_rank = global_state_->rank;
-  nccl_size = global_state_->size;
+  nccl_rank = global_state_nccl_->rank;
+  nccl_size = global_state_nccl_->size;
   nccl_id_bcast_comm = Communicator::GLOBAL;
+}
+
+NCCLBroadcast::NCCLBroadcast(NCCLContext* nccl_context, SocketContext* net_context,
+                CUDAContext* cuda_context, HorovodGlobalState* global_state)
+    : CUDAOp(cuda_context, global_state),
+    NCCLOp(nccl_context, net_context, global_state), BroadcastOp(global_state) {
+}
+
+Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  assert(entries.size() == 1);
+  auto e = entries[0];
+
+  // On root rank, NCCL_Bcast sends data, on other ranks it receives data.
+  void* data_ptr;
+  if (global_state_->rank == e.root_rank) {
+    data_ptr = (void*) e.tensor->data();
+  } else {
+    data_ptr = (void*) e.output->data();
+  }
+
+  if (entries[0].device != CPU_DEVICE_ID) {
+    LOG(DEBUG) << "Using ncclBcast";
+    InitCUDA(entries);
+    InitNCCLComm(entries, response.devices());
+    InitCUDAQueue(entries, response);
+
+
+    global_state_->timeline.ActivityStartAll(entries, NCCL_BCAST);
+    auto nccl_result = ncclBcast(data_ptr,
+                       (int) e.tensor->shape().num_elements(),
+                       GetNCCLDataType(e.tensor),
+                       e.root_rank, *nccl_comm_, *stream_);
+    nccl_context_->ErrorCheck("ncclBcast", nccl_result);
+    global_state_->timeline.ActivityEndAll(entries);
+
+    return FinalizeCUDAQueue(entries);
+  } else {  // use net_comm to broadcast
+    LOG(DEBUG) << "Using socket Bcast";
+    // global_state_->timeline.ActivityStartAll(entries, NCCL_BCAST);
+    auto ret = net_context_->comm.Bcast(
+        data_ptr, e.tensor->shape().num_elements() * GetSizeof(e.tensor), e.root_rank);
+    if (ret != 0) {
+      throw std::logic_error("Socket_Broadcast failed.");
+    }
+    // global_state_->timeline.ActivityEndAll(entries);
+    return Status::OK();
+  }
 }
 
 NCCLHierarchicalAllreduce::NCCLHierarchicalAllreduce(NCCLContext* nccl_context, MPIContext* mpi_context,
                                                      CUDAContext* cuda_context, HorovodGlobalState* global_state)
-    : NCCLAllreduce(nccl_context, mpi_context,
+    : NCCLAllreduce(nccl_context, mpi_context, nullptr,
                     cuda_context, global_state) {}
 
 Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "NCCL_HIERARCHICAL_ALLREDUCE";
   auto& first_entry = entries[0];
 
   // Determine GPU IDs of the devices participating in this communicator.

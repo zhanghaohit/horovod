@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include "mpi_operations.h"
+#include "../logging.h"
 
 namespace horovod {
 namespace common {
@@ -23,6 +24,7 @@ MPIAllreduce::MPIAllreduce(MPIContext* mpi_context, HorovodGlobalState* global_s
     : AllreduceOp(global_state), mpi_context_(mpi_context) {}
 
 Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "MPIAllReduce";
   auto& first_entry = entries[0];
 
   void* buffer_data;
@@ -332,6 +334,7 @@ MPIBroadcast::MPIBroadcast(MPIContext* mpi_context, HorovodGlobalState* global_s
     : BroadcastOp(global_state), mpi_context_(mpi_context) {}
 
 Status MPIBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "MPIBroadcast";
   assert(entries.size() == 1);
   auto e = entries[0];
 

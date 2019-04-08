@@ -11,7 +11,6 @@
 #include <chrono>
 #include <thread>
 #include "net.h"
-#include "logging.h"
 
 namespace horovod {
 namespace common {
@@ -64,37 +63,37 @@ int ServerSocket::Listen() {
 }
 
 ClientSocket* ServerSocket::Accept() {
-	sockaddr_storage sa;
-	socklen_t salen = sizeof(sa);
+  sockaddr_storage sa;
+  socklen_t salen = sizeof(sa);
 
-	int max_ip_len = 46;
-	char cip[max_ip_len];
-	int cfd, cport;
+  int max_ip_len = 46;
+  char cip[max_ip_len];
+  int cfd, cport;
 
-	while (true) {
-		cfd = accept(fd_, (sockaddr*) &sa, &salen);
-		if (cfd == -1) {
-			if (errno == EINTR)
-				continue;
-			else {
-				LOG(WARNING) << "accept: " << strerror(errno);
-				return nullptr;
-			}
-		}
-		break;
-	}
+  while (true) {
+    cfd = accept(fd_, (sockaddr*) &sa, &salen);
+    if (cfd == -1) {
+      if (errno == EINTR)
+        continue;
+      else {
+        LOG(WARNING) << "accept: " << strerror(errno);
+        return nullptr;
+      }
+    }
+    break;
+  }
 
-	if (sa.ss_family == AF_INET) {
-		sockaddr_in* s = (sockaddr_in*) &sa;
-		inet_ntop(AF_INET, (void*) &(s->sin_addr), cip, max_ip_len);
-		cport = ntohs(s->sin_port);
-	} else {
-		LOG(WARNING) << "not supported IPV6";
-		return nullptr;
-	}
+  if (sa.ss_family == AF_INET) {
+    sockaddr_in* s = (sockaddr_in*) &sa;
+    inet_ntop(AF_INET, (void*) &(s->sin_addr), cip, max_ip_len);
+    cport = ntohs(s->sin_port);
+  } else {
+    LOG(WARNING) << "not supported IPV6";
+    return nullptr;
+  }
 
-	LOG(DEBUG) << "accept " << cip << ":" << cport << " (socket = " << cfd << ")";
-	return new ClientSocket (string(cip), cport, cfd);
+  LOG(DEBUG) << "accept " << cip << ":" << cport << " (socket = " << cfd << ")";
+  return new ClientSocket (string(cip), cport, cfd);
 }
 
 int ClientSocket::Connect(bool blocking) {
@@ -151,41 +150,48 @@ int ClientSocket::Connect(bool blocking) {
 }
 
 int ClientSocket::Send(const void* buf, int size) {
-	int nwritten, totlen = 0;
-	const char* p = static_cast<const char*>(buf);
-	const char* copy = static_cast<const char*>(buf);
-	while (totlen != size) {
+  int nwritten, totlen = 0;
+  const char* p = static_cast<const char*>(buf);
+  while (totlen != size) {
     // TODO(hzhang): it may signal SIGPIPE if remote close the connection
-		nwritten = write(fd_, p, size - totlen);
-		if (nwritten == 0)
-			return totlen;
-		if (nwritten == -1)
-			return -1;
-		totlen += nwritten;
-		p += nwritten;
-	}
-	LOG(TRACE) << "send " << copy << " (size = " << size << ")";
-	return totlen;
+    nwritten = write(fd_, p, size - totlen);
+    if (nwritten == 0)
+      return totlen;
+    if (nwritten == -1) {
+      LOG(ERROR) << "Sent " << totlen << ", expected " << size;
+      return -1;
+    }
+    totlen += nwritten;
+    p += nwritten;
+  }
+  return totlen;
 }
 
 int ClientSocket::Recv(void* buf, int size) {
-  LOG(TRACE) << "Start recv";
-  int nread = read(fd_, buf, size);
-  if (nread == 0) {
-    LOG(INFO) << "socket " << fd_ << " has been closed";
+  int nread, totlen = 0;
+  char* p = static_cast<char*>(buf);
+  while (totlen != size) {
+    nread = read(fd_, p, size - totlen);
+    if (nread == 0) {
+      LOG(INFO) << "socket " << fd_ << " has been closed";
+      break;
+    }
+    if (nread == -1) {
+      // TODO(hzhang): EAGAIN handle
+      LOG(INFO) << "read socket " << fd_ << " failed: " << strerror(errno) << " (errno = " << errno << ")";
+      break;
+    }
+
+    totlen += nread;
+    p += nread;
   }
-  if (nread == -1) {
-    // TODO(hzhang): EAGAIN handle
-    LOG(INFO) << "read socket " << fd_ << " failed: " << strerror(errno) << " (errno = " << errno << ")";
-  }
-  LOG(TRACE) << "End recv";
-  return nread;
+  return totlen;
 }
 
 string ClientSocket::Recv(int size) {
-	char buf[size];
-	int nread = Recv(buf, size);
-	return nread > 0 ? string(buf, nread) : string();
+  char buf[size];
+  int nread = Recv(buf, size);
+  return nread > 0 ? string(buf, nread) : string();
 }
 
 int ClientSocket::Recv(stringstream& ss, int size) {
@@ -196,27 +202,48 @@ int ClientSocket::Recv(stringstream& ss, int size) {
 }
 
 int SocketCommunicator::Bcast(void *buffer, int size, int root) {
-  int ret = size;
   if (root == rank_) {  // master
     for (auto &it : clients_) {
       auto s = it.second->Send(buffer, size);
       if (s != size) {
         LOG(ERROR) << "Bcast failed: sent " << s << " bytes data, expected " << size << " bytes data";
+        return -1;
       }
-      ret += s;
     }
   } else {  // worker
     assert(clients_.size() == 1);
-    ret = clients_[0]->Recv(buffer, size);
+    auto ret = clients_[0]->Recv(buffer, size);
     if (ret != size) {
       LOG(ERROR) << "Bcast failed: received " << ret << " bytes data, expected " << size << " bytes data";
+      return -1;
     }
   }
-  return ret;
+  return 0;
+}
+
+int SocketCommunicator::Barrier(int root) {
+  if (root == rank_) {  // master
+    for (auto &it : clients_) {
+      auto s = it.second->Send("b");
+      if (s != 1) {
+        LOG(ERROR) << "[Rank " << rank_ << "] Barrier failed";
+        return -1;
+      }
+    }
+  } else {  // worker
+    assert(clients_.size() == 1);
+    char buf;
+    auto ret = clients_[0]->Recv(&buf, 1);
+    if (ret != 1) {
+      LOG(ERROR) << "[Rank " << rank_ << "] Barrier failed";
+      return -1;
+    }
+  }
+  return 0;
 }
 
 int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
-  int ret = sendsize;
+  // LOG(DEBUG, rank_) << "Gather " << sendsize << " from " << num_ranks_ << " members";
   const char *sb = static_cast<const char*>(sendbuf);
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
@@ -225,22 +252,22 @@ int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf,
       if (s != sendsize) {
         LOG(ERROR) << "Gather failed: received " << s
             << " bytes data, expected " << sendsize << " bytes data";
+        return -1;
       }
-      ret += s;
     }
   } else {
-    ret = clients_.at(0)->Send(sendbuf, sendsize);
+    auto ret = clients_.at(0)->Send(sendbuf, sendsize);
     if (ret != sendsize) {
       LOG(ERROR) << "Gather failed: sent " << ret
           << " bytes data, expected " << sendsize << " bytes data";
+      return -1;
     }
   }
-  return ret;
+  return 0;
 }
 
 int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
                                 void *recvbuf, const int *recvsize, const int *displs, int root) {
-  int ret = 0;
   const char *sb = static_cast<const char*>(sendbuf);
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
@@ -248,35 +275,42 @@ int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
     assert(recvbuf != nullptr);
     assert(displs != nullptr);
 
-    ret = recvsize[0];
+    auto ret = recvsize[0];
     for (int i = 1; i < num_ranks_; i++) {
+      // LOG(DEBUG, rank_) << "Gatherv " << recvsize[i] << " from " << i << " to offset " << displs[i];
       auto s = clients_.at(i)->Recv(rb + displs[i], recvsize[i]);
       if (s != recvsize[i]) {
         LOG(ERROR) << "Gather failed: received " << s
             << " bytes data, expected " << recvsize[i] << " bytes data";
+        return -1;
       }
-      ret += s;
     }
   } else {
+    // LOG(DEBUG, rank_) << "Gatherv " << sendsize << " from " << num_ranks_ << " members";
     assert(sendbuf != nullptr);
 
-    ret = clients_.at(0)->Send(sendbuf, sendsize);
+    auto ret = clients_.at(0)->Send(sendbuf, sendsize);
     if (ret != sendsize) {
       LOG(ERROR) << "Gather failed: sent " << ret
           << " bytes data, expected " << sendsize << " bytes data";
+      return -1;
     }
   }
-  return ret;
-
+  return 0;
 }
 
-int SocketCommunicator::Init(int num_ranks) {
-  if (const char* env_p = std::getenv("HOROVOD_RANK")) {
-    rank_ = std::stoi(env_p);
+int SocketCommunicator::Init(int num_ranks, int rank) {
+  if (rank == -1) {
+    if (const char* env_p = std::getenv("HOROVOD_RANK")) {
+      rank_ = std::stoi(env_p);
+    } else {
+      LOG(WARNING) << "HOROVOD_RANK is not configured";
+    }
   } else {
-    LOG(WARNING) << "HOROVOD_RANK is not configured";
+    rank_ = rank;
   }
   num_ranks_ = num_ranks;
+  LOG(INFO) << "HOROVOD_NUM_RANKS = " << num_ranks_ << ", HOROVOD_RANK = " << rank_;
 
   if (rank_ == 0) {
     is_master_ = true;
@@ -307,7 +341,7 @@ int SocketCommunicator::Init(int num_ranks) {
   // if master, create master socket and listen
   if (is_master_) {
     LOG(INFO) << "Create master on " << master_ip_ << ":" << std::to_string(master_port_);
-    master_ = std::make_unique<ServerSocket>(master_port_);
+    master_.reset(new ServerSocket(master_port_));
     master_->Listen();
 
     // TODO(hzhang): rank to client map
@@ -323,13 +357,24 @@ int SocketCommunicator::Init(int num_ranks) {
     }
   } else {  // if worker, connect with master
     clients_.clear();
-    clients_.emplace(0, std::make_unique<ClientSocket>(master_ip_, master_port_));
+    clients_.emplace(0, std::unique_ptr<ClientSocket>(new ClientSocket(master_ip_, master_port_)));
     clients_.at(0)->Connect();
     // send its own rank to master
     clients_.at(0)->Send(&rank_, sizeof(int));
   }
 
   return 0;
+}
+
+SocketCommunicator::~SocketCommunicator() {
+  if (rank_ == 0) {
+    // FIXME(hzhang): find a better way to let client close first
+    sleep(1);
+    clients_.clear();
+    master_.reset();
+  } else {
+    clients_.clear();
+  }
 }
 
 } // namespace common

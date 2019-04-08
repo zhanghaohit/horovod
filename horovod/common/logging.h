@@ -1,3 +1,6 @@
+#ifndef HOROVOD_COMMON_LOGGING_H
+#define HOROVOD_COMMON_LOGGING_H
+
 #include <sstream>
 #include <string>
 
@@ -57,3 +60,5 @@ bool LogTimeFromEnv();
 
 }
 }
+
+#endif  // HOROVOD_COMMON_LOGGING_H

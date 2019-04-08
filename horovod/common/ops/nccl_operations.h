@@ -21,6 +21,7 @@
 
 #include "../mpi_context.h"
 #include "cuda_operations.h"
+#include "../logging.h"
 
 namespace horovod {
 namespace common {
@@ -33,24 +34,49 @@ struct NCCLContext {
   void ShutDown();
 };
 
-class NCCLAllreduce : public CUDAAllreduce {
-public:
-  NCCLAllreduce(NCCLContext* nccl_context, MPIContext* mpi_context,
-                CUDAContext* cuda_context, HorovodGlobalState* global_state);
-
-  Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
-
+class NCCLOp {
 protected:
+  NCCLOp(NCCLContext* nccl_context, SocketContext* net_context, HorovodGlobalState* global_state)
+      : nccl_context_(nccl_context), net_context_(net_context), global_state_nccl_(global_state) {}
   void InitNCCLComm(const std::vector<TensorTableEntry>& entries, const std::vector<int32_t>& nccl_device_map);
 
   virtual void PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
                                         Communicator& nccl_id_bcast_comm);
 
-  NCCLContext* nccl_context_;
-  ncclComm_t* nccl_comm_;
+  NCCLContext* nccl_context_ = nullptr;
+  ncclComm_t* nccl_comm_ = nullptr;
 
-  MPIContext* mpi_context_;
+  SocketContext* net_context_ = nullptr;
+  MPIContext* mpi_context_ = nullptr;
+
+  HorovodGlobalState* global_state_nccl_ = nullptr;
 };
+
+class NCCLAllreduce : public CUDAAllreduce, public NCCLOp {
+public:
+  NCCLAllreduce(NCCLContext* nccl_context, MPIContext* mpi_context, SocketContext* net_context,
+                CUDAContext* cuda_context, HorovodGlobalState* global_state);
+
+  Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
+};
+
+class NCCLBroadcast : public BroadcastOp, public CUDAOp, public NCCLOp {
+public:
+  NCCLBroadcast(NCCLContext* nccl_context, SocketContext* net_context,
+                CUDAContext* cuda_context, HorovodGlobalState* global_state);
+
+  Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
+
+  bool Enabled(const ParameterManager& param_manager,
+               const std::vector<TensorTableEntry>& entries,
+               const Response& response) const override {
+    // FIXME(hzhang): separate NCCLBroadcast and SocketBroadcast
+    // auto ret = entries[0].device != CPU_DEVICE_ID;
+    // LOG(INFO) << "[NCCLBroadcast] data in GPU: " << ret;
+    return true;
+  }
+};
+
 
 class NCCLHierarchicalAllreduce : public NCCLAllreduce {
 public:

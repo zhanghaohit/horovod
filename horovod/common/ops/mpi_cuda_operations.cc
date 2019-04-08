@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include "mpi_cuda_operations.h"
+#include "../logging.h"
 
 namespace horovod {
 namespace common {
@@ -26,6 +27,7 @@ MPI_CUDAAllreduce::MPI_CUDAAllreduce(MPIContext* mpi_context,
       mpi_context_(mpi_context) {}
 
 Status MPI_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "MPI_CUDA_ALLREDUCE";
   auto& first_entry = entries[0];
 
   InitCUDA(entries);

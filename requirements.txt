@@ -1,0 +1,7 @@
+tensorflow
+torch
+mxnet
+cffi>=1.4.0
+cloudpickle
+psutil
+six

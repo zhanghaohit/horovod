@@ -61,21 +61,15 @@ struct CUDAContext {
                      const std::vector<TensorTableEntry>& entries, Timeline& timeline);
 };
 
-class CUDAAllreduce : public AllreduceOp {
-public:
-  CUDAAllreduce(CUDAContext* context,
-                HorovodGlobalState* global_state);
-
-  bool Enabled(const ParameterManager& param_manager,
-               const std::vector<TensorTableEntry>& entries,
-               const Response& response) const override;
-
+class CUDAOp {
 protected:
+  CUDAOp(CUDAContext* cuda_context, HorovodGlobalState* global_state)
+      : cuda_context_(cuda_context), gstate_(global_state) {}
   void MemcpyEntryInFusionBuffer(const std::vector<TensorTableEntry>& entries,
-                                 const TensorTableEntry& e, void* buffer_data_at_offset) override;
+                                 const TensorTableEntry& e, void* buffer_data_at_offset);
 
   void MemcpyEntryOutFusionBuffer(const std::vector<TensorTableEntry>& entries,
-                                  const void* buffer_data_at_offset, TensorTableEntry& e) override;
+                                  const void* buffer_data_at_offset, TensorTableEntry& e);
 
   void InitCUDA(const std::vector<TensorTableEntry>& entries);
 
@@ -94,10 +88,31 @@ protected:
   // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/
   std::queue<std::pair<std::string, cudaEvent_t>> event_queue_;
 
-  cudaStream_t* stream_;
-  void* host_buffer_;
+  cudaStream_t* stream_ = nullptr;
+  void* host_buffer_ = nullptr;
 
-  struct CUDAContext* cuda_context_;
+  struct CUDAContext* cuda_context_ = nullptr;
+  HorovodGlobalState* gstate_ = nullptr;
+};
+
+class CUDAAllreduce : public AllreduceOp, public CUDAOp {
+public:
+  CUDAAllreduce(CUDAContext* context,
+                HorovodGlobalState* global_state);
+
+  bool Enabled(const ParameterManager& param_manager,
+               const std::vector<TensorTableEntry>& entries,
+               const Response& response) const override;
+protected:
+  void MemcpyEntryInFusionBuffer(const std::vector<TensorTableEntry>& entries,
+                                 const TensorTableEntry& e, void* buffer_data_at_offset) override {
+    CUDAOp::MemcpyEntryInFusionBuffer(entries, e, buffer_data_at_offset);
+  }
+
+  void MemcpyEntryOutFusionBuffer(const std::vector<TensorTableEntry>& entries,
+                                  const void* buffer_data_at_offset, TensorTableEntry& e) override {
+    CUDAOp::MemcpyEntryOutFusionBuffer(entries, buffer_data_at_offset, e);
+  }
 };
 
 } // namespace common

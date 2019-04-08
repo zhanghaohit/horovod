@@ -19,6 +19,7 @@
 
 #include "common.h"
 #include "mpi.h"
+#include "net.h"
 
 namespace horovod {
 namespace common {
@@ -50,6 +51,10 @@ struct MPIContext {
 
   // MPI Window used for shared memory allgather
   MPI_Win window;
+};
+
+struct SocketContext {
+  SocketCommunicator comm;
 };
 
 } // namespace common

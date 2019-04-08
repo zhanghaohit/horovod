@@ -62,6 +62,7 @@ ParameterManager::ParameterManager() :
 }
 
 void ParameterManager::CreateMpiTypes() {
+#if !DYNAMIC_SCHEDULE
   const int nitems = 5;
   int blocklengths[5] = {1, 1, 1, 1, 1};
   MPI_Datatype types[5] = {MPI_CXX_BOOL, MPI_CXX_BOOL, MPI_DOUBLE, MPI_DOUBLE, MPI_CXX_BOOL};
@@ -75,18 +76,26 @@ void ParameterManager::CreateMpiTypes() {
 
   MPI_Type_create_struct(nitems, blocklengths, offsets, types, &mpi_params_type_);
   MPI_Type_commit(&mpi_params_type_);
+#endif
 }
 
 void ParameterManager::FreeMpiTypes() {
+#if !DYNAMIC_SCHEDULE
   if (mpi_params_type_ != MPI_DATATYPE_NULL) {
     MPI_Type_free(&mpi_params_type_);
   }
+#endif
 }
 
+#if DYNAMIC_SCHEDULE
+void ParameterManager::Initialize(int32_t rank, int32_t root_rank, SocketCommunicator *comm, std::string file_name) {
+  comm_ = comm;
+#else
 void ParameterManager::Initialize(int32_t rank, int32_t root_rank, MPI_Comm mpi_comm, std::string file_name) {
+  mpi_comm_ = mpi_comm;
+#endif
   rank_ = rank;
   root_rank_ = root_rank;
-  mpi_comm_ = mpi_comm;
   if (rank_ == root_rank) {
     LOG(INFO) << "Autotuner: Tunable params [hierarchical_allreduce,hierarchical_allgather,cycle_time_ms,tensor_fusion_threshold] score";
   }
@@ -233,7 +242,11 @@ void ParameterManager::SyncParams() {
   }
 
   // Broadcast the parameter struct to other workers.
+#if DYNAMIC_SCHEDULE
+  comm_->Bcast(&params, sizeof(params), root_rank_);
+#else
   MPI_Bcast(&params, 1, mpi_params_type_, root_rank_, mpi_comm_);
+#endif
 
   // The other workers receive the broadcasted parameters and update their internal state in response.
   if (rank_ != root_rank_) {

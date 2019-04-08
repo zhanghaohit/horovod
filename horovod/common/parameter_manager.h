@@ -26,6 +26,9 @@
 #include <vector>
 
 #include "mpi.h"
+#if DYNAMIC_SCHEDULE
+#include "net.h"
+#endif
 
 #include <Eigen/Core>
 
@@ -52,7 +55,11 @@ public:
   void FreeMpiTypes();
 
   // Initializes this manager if auto tuning was requested.
+#if DYNAMIC_SCHEDULE
+  void Initialize(int32_t rank, int32_t root_rank, SocketCommunicator* comm, std::string file_name);
+#else
   void Initialize(int32_t rank, int32_t root_rank, MPI_Comm mpi_comm, std::string file_name);
+#endif
 
   // Starts or stop the auto tuning procedure.
   void SetAutoTuning(bool active);
@@ -236,7 +243,11 @@ private:
   };
 
   MPI_Datatype mpi_params_type_;
+#if DYNAMIC_SCHEDULE
+  SocketCommunicator *comm_ = nullptr;
+#else
   MPI_Comm mpi_comm_;
+#endif
 };
 
 

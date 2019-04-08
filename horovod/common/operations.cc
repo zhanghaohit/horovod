@@ -91,6 +91,10 @@ HorovodGlobalState horovod_global;
 
 MPIContext mpi_context;
 
+#if DYNAMIC_SCHEDULE
+SocketContext net_context;
+#endif
+
 #if HAVE_CUDA
 CUDAContext cuda_context;
 #endif
@@ -136,10 +140,16 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 
 #else
   #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
-    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
-        new NCCLHierarchicalAllreduce(&nccl_context, &mpi_context, &cuda_context, &state)));
-    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
-        new NCCLAllreduce(&nccl_context, &mpi_context, &cuda_context, &state)));
+    #if DYNAMIC_SCHEDULE
+      LOG(INFO) << "Enable Dynamic NCCLAllReduce";
+      allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+          new NCCLAllreduce(&nccl_context, nullptr, &net_context, &cuda_context, &state)));
+    #else
+      allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+          new NCCLHierarchicalAllreduce(&nccl_context, &mpi_context, &cuda_context, &state)));
+      allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+          new NCCLAllreduce(&nccl_context, &mpi_context, nullptr, &cuda_context, &state)));
+    #endif
 
   #elif HAVE_DDL && HOROVOD_GPU_ALLREDUCE == 'D'
     allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new DDLAllreduce(&ddl_context, &cuda_context, &state)));
@@ -152,6 +162,13 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   // Default operations, always enabled but last to be checked.
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPIAllreduce(&mpi_context, &state)));
   allgather_ops.push_back(std::shared_ptr<AllgatherOp>(new MPIAllgather(&mpi_context, &state)));
+
+#if DYNAMIC_SCHEDULE
+  // FIXME(hzhang): add ifdef to choose
+  LOG(INFO) << "Enable Dynamic Broadcast";
+  broadcast_ops.push_back(std::shared_ptr<BroadcastOp>(
+          new NCCLBroadcast(&nccl_context, &net_context, &cuda_context, &state)));
+#endif
   broadcast_ops.push_back(std::shared_ptr<BroadcastOp>(new MPIBroadcast(&mpi_context, &state)));
   std::shared_ptr<ErrorOp> error_op(new ErrorOp(&state));
 
@@ -672,6 +689,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   // By default, we will ask for multiple threads, so other libraries like
   // mpi4py can be used together with Horovod if multi-threaded MPI is
   // installed.
+#if !DYNAMIC_SCHEDULE
   auto mpi_threads_disable = std::getenv(HOROVOD_MPI_THREADS_DISABLE);
   int required = MPI_THREAD_MULTIPLE;
   if (mpi_threads_disable != nullptr &&
@@ -712,19 +730,35 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     // MPI_COMM_WORLD
     MPI_Comm_dup(MPI_COMM_WORLD, &(ctx.mpi_comm));
   }
+#endif
 
   // Get MPI rank to determine if we are rank zero.
   int rank;
+#if DYNAMIC_SCHEDULE
+  rank = net_context.comm.rank();
+#else
   MPI_Comm_rank(ctx.mpi_comm, &rank);
+#endif
   bool is_coordinator = rank == 0;
 
   // Get MPI size to determine how many tensors to wait for before reducing.
   int size;
+#if DYNAMIC_SCHEDULE
+  size = net_context.comm.num_ranks();
+#else
   MPI_Comm_size(ctx.mpi_comm, &size);
+#endif
   if (is_coordinator) {
     LOG(INFO) << "Started Horovod with " << size << " processes";
   }
 
+#if DYNAMIC_SCHEDULE
+  int local_rank = 0, local_size = 1, cross_rank = 0, cross_size = 1;
+  for (int i = 0; i < size; i++) {
+    state.local_sizes.push_back(1);
+  }
+  state.is_homogeneous = true;
+#else
   // Determine local rank by querying the local communicator.
   MPI_Comm local_comm;
   MPI_Comm_split_type(ctx.mpi_comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL,
@@ -775,6 +809,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 
   // Create custom datatypes for the parameter manager.
   state.param_manager.CreateMpiTypes();
+#endif
 
   state.rank = rank;
   state.local_rank = local_rank;
@@ -782,12 +817,20 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   state.size = size;
   state.local_size = local_size;
   state.cross_size = cross_size;
+#if !DYNAMIC_SCHEDULE
   ctx.local_comm = local_comm;
   ctx.cross_comm = cross_comm;
   ctx.mpi_float16_t = mpi_float16_t;
   ctx.mpi_float16_sum = mpi_float16_sum;
   state.mpi_threads_supported = (provided == MPI_THREAD_MULTIPLE);
   state.local_comm_ranks = local_comm_ranks;
+#else
+  ctx.local_comm = MPI_COMM_NULL;
+  ctx.cross_comm = MPI_COMM_NULL;
+  ctx.mpi_comm = MPI_COMM_NULL;
+  ctx.mpi_float16_t = MPI_DATATYPE_NULL;
+  ctx.mpi_float16_sum = MPI_OP_NULL;
+#endif
 
   // Open the timeline file on coordinator.
   auto horovod_timeline = std::getenv(HOROVOD_TIMELINE);
@@ -864,10 +907,17 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   if (horovod_autotune != nullptr &&
       std::strtol(horovod_autotune, nullptr, 10) > 0) {
     auto horovod_autotune_log = std::getenv(HOROVOD_AUTOTUNE_LOG);
+#if DYNAMIC_SCHEDULE
+    state.param_manager.Initialize(rank, RANK_ZERO, &net_context.comm,
+                                   horovod_autotune_log != nullptr
+                                       ? std::string(horovod_autotune_log)
+                                       : "");
+#else
     state.param_manager.Initialize(rank, RANK_ZERO, ctx.mpi_comm,
                                    horovod_autotune_log != nullptr
                                        ? std::string(horovod_autotune_log)
                                        : "");
+#endif
     state.param_manager.SetAutoTuning(true);
   }
 
@@ -1045,8 +1095,12 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     // 1. Get message lengths from every rank.
     auto recvcounts = new int[state.size];
     recvcounts[0] = 0;
+#if DYNAMIC_SCHEDULE
+    net_context.comm.Gather(nullptr, sizeof(int), recvcounts);
+#else
     MPI_Gather(MPI_IN_PLACE, 1, MPI_INT, recvcounts, 1, MPI_INT, RANK_ZERO,
                ctx.mpi_comm);
+#endif
 
     // 2. Compute displacements.
     auto displcmnts = new int[state.size];
@@ -1062,8 +1116,12 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 
     // 3. Collect messages from every rank.
     auto buffer = new uint8_t[total_size];
+#if DYNAMIC_SCHEDULE
+    net_context.comm.Gatherv(nullptr, 0, buffer, recvcounts, displcmnts);
+#else
     MPI_Gatherv(nullptr, 0, MPI_BYTE, buffer, recvcounts, displcmnts, MPI_BYTE,
                 RANK_ZERO, ctx.mpi_comm);
+#endif
 
     // 4. Process messages.
     for (int i = 1; i < state.size; ++i) {
@@ -1247,9 +1305,14 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     std::string encoded_response;
     ResponseList::SerializeToString(response_list, encoded_response);
     int encoded_response_length = (int)encoded_response.length() + 1;
+#if DYNAMIC_SCHEDULE
+    net_context.comm.Bcast(&encoded_response_length, sizeof(encoded_response_length));
+    net_context.comm.Bcast((void*)encoded_response.c_str(), encoded_response_length);
+#else
     MPI_Bcast(&encoded_response_length, 1, MPI_INT, RANK_ZERO, ctx.mpi_comm);
     MPI_Bcast((void*)encoded_response.c_str(), encoded_response_length,
               MPI_BYTE, RANK_ZERO, ctx.mpi_comm);
+#endif
 
     std::vector<std::string> tensor_names;
     int64_t total_tensor_size = 0;
@@ -1288,16 +1351,31 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     }
     RequestList::SerializeToString(message_list, encoded_message);
     int encoded_message_length = (int)encoded_message.length() + 1;
+#if DYNAMIC_SCHEDULE
+    net_context.comm.Gather(&encoded_message_length, sizeof(encoded_message_length), nullptr);
+    net_context.comm.Gatherv((void*)encoded_message.c_str(), encoded_message_length,
+                             nullptr, nullptr, nullptr);
+
+#else
     MPI_Gather(&encoded_message_length, 1, MPI_INT, nullptr, 1, MPI_INT,
                RANK_ZERO, ctx.mpi_comm);
     MPI_Gatherv((void*)encoded_message.c_str(), encoded_message_length,
                 MPI_BYTE, nullptr, nullptr, nullptr, MPI_BYTE, RANK_ZERO,
                 ctx.mpi_comm);
+#endif
 
     int msg_length;
+#if DYNAMIC_SCHEDULE
+    net_context.comm.Bcast(&msg_length, sizeof(msg_length));
+#else
     MPI_Bcast(&msg_length, 1, MPI_INT, RANK_ZERO, ctx.mpi_comm);
+#endif
     auto buffer = new uint8_t[msg_length];
+#if DYNAMIC_SCHEDULE
+    net_context.comm.Bcast(buffer, msg_length);
+#else
     MPI_Bcast(buffer, msg_length, MPI_BYTE, RANK_ZERO, ctx.mpi_comm);
+#endif
     ResponseList response_list;
     ResponseList::ParseFromBytes(response_list, buffer);
     delete[] buffer;
@@ -1341,7 +1419,16 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 // Start Horovod background thread. Ensure that this is
 // only done once no matter how many times this function is called.
 void InitializeHorovodOnce(const int* ranks, int nranks) {
-  SocketCommunicator comm;
+#if DYNAMIC_SCHEDULE
+  int num_ranks = 0;
+  // FIXME(hzhang): get from central controller
+  if (const char* env_p = std::getenv("HOROVOD_NUM_RANKS")) {
+    num_ranks = std::stoi(env_p);
+  } else {
+    LOG(WARNING) << "HOROVOD_NUM_RANKS is not configured";
+  }
+  net_context.comm.Init(num_ranks);
+#endif
   // Ensure background thread is only started once.
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {

@@ -500,6 +500,13 @@ def get_common_options(build_ext):
         raise DistutilsError('HOROVOD_GPU_BROADCAST=%s is invalid, supported '
                              'values are "", "MPI".' % gpu_broadcast)
 
+    # dynamic_schedule overwrites all other environments
+    dynamic_schedule = os.environ.get('DYNAMIC_SCHEDULE')
+    if dynamic_schedule:
+        gpu_allreduce = 'NCCL'
+        # gpu_allgather = 'NCCL'
+        # gpu_broadcast = 'NCCL'
+
     if gpu_allreduce or gpu_allgather or gpu_broadcast:
         have_cuda = True
         cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
@@ -559,7 +566,8 @@ def get_common_options(build_ext):
                'horovod/common/ops/operation_manager.cc',
                'horovod/common/optim/bayesian_optimization.cc',
                'horovod/common/optim/gaussian_process.cc',
-               'horovod/common/logging.cc']
+               'horovod/common/logging.cc',
+               'horovod/common/net.cc']
     COMPILE_FLAGS = cpp_flags + shlex.split(mpi_flags)
     LINK_FLAGS = link_flags + shlex.split(mpi_flags)
     LIBRARY_DIRS = []
@@ -595,6 +603,9 @@ def get_common_options(build_ext):
 
     if gpu_broadcast:
         MACROS += [('HOROVOD_GPU_BROADCAST', "'%s'" % gpu_broadcast[0])]
+
+    if dynamic_schedule:
+        MACROS += [('DYNAMIC_SCHEDULE', '1')]
 
     return dict(MACROS=MACROS,
                 INCLUDES=INCLUDES,
