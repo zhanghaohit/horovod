@@ -34,10 +34,7 @@ class Socket {
   Socket (const string& ip, int port): ip_(ip), port_(port) {};
   Socket (const string& ip, int port, int fd): ip_(ip), port_(port), fd_(fd) {};
   ~Socket () {
-    if (fd_ > 0) {
-      LOG(DEBUG) << "close " << ip_ << ":" << port_;
-      close(fd_);
-    }
+    Close();
   }
 
   // get the file descriptor of the socket
@@ -51,6 +48,14 @@ class Socket {
 
   int port() const noexcept {
     return port_;
+  }
+
+  void Close() {
+    if (fd_ > 0) {
+      LOG(DEBUG) << "close " << ip_ << ":" << port_;
+      close(fd_);
+    }
+    fd_ = -1;
   }
 
  protected:

@@ -189,15 +189,19 @@ int ClientSocket::Recv(void* buf, int size) {
 }
 
 string ClientSocket::Recv(int size) {
-  char buf[size];
+  char* buf = new char[size];
   int nread = Recv(buf, size);
-  return nread > 0 ? string(buf, nread) : string();
+  nread = nread < 0 ? 0 : nread;
+  auto ret = string(buf, nread);
+  delete[] buf;
+  return ret;
 }
 
 int ClientSocket::Recv(stringstream& ss, int size) {
-  char buf[size];
+  char* buf = new char[size];
   int nread = Recv(buf, size);
   ss.write(buf, nread);
+  delete[] buf;
   return nread;
 }
 
@@ -310,7 +314,7 @@ int SocketCommunicator::Init(int num_ranks, int rank) {
     rank_ = rank;
   }
   num_ranks_ = num_ranks;
-  LOG(INFO) << "HOROVOD_NUM_RANKS = " << num_ranks_ << ", HOROVOD_RANK = " << rank_;
+  LOG(INFO) << "Total ranks = " << num_ranks_ << ", HOROVOD_RANK = " << rank_;
 
   if (rank_ == 0) {
     is_master_ = true;
