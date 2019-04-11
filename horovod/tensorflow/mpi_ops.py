@@ -148,9 +148,12 @@ def _allgather_grad(op, grad):
     return splits[rank()]
 
 
-def broadcast(tensor, root_rank, name=None):
+def broadcast(tensor, root_rank, ranks=[], name=None):
     """An op which broadcasts the input tensor on root rank to the same input tensor
-    on all other Horovod processes.
+    on other Horovod processes.
+
+    If ranks are not empty, it will only broadcast to the specified ranks
+    Otherwise, it will broadcast to all the other ranks.
 
     The broadcast operation is keyed by the name of the op. The tensor type and
     shape must be the same on all Horovod processes for a given name. The broadcast
@@ -162,7 +165,7 @@ def broadcast(tensor, root_rank, name=None):
     """
     if name is None and not _executing_eagerly():
         name = 'HorovodBroadcast_%s' % _normalize_name(tensor.name)
-    return MPI_LIB.horovod_broadcast(tensor, name=name, root_rank=root_rank)
+    return MPI_LIB.horovod_broadcast(tensor, name=name, root_rank=root_rank, ranks=ranks)
 
 
 @ops.RegisterGradient('HorovodBroadcast')

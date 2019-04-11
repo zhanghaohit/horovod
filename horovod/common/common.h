@@ -180,6 +180,9 @@ struct TensorTableEntry {
   int device = CPU_DEVICE_ID;
   // A callback to call with the status.
   StatusCallback callback;
+
+  // specific ranks
+  std::vector<int> ranks;
 };
 using TensorTable = std::unordered_map<std::string, TensorTableEntry>;
 

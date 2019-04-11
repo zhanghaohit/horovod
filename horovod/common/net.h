@@ -128,7 +128,7 @@ class SocketCommunicator {
   ~SocketCommunicator();
   int Init(int num_ranks, int rank = -1);
 
-  int Bcast(void *buffer, int size, int root = 0);
+  int Bcast(void *buffer, int size, int root = 0, const std::vector<int> &ranks = std::vector<int>());
 
   // recvbuf should have allocated size >= size * num_ranks_
   int Gather(const void *sendbuf, int sendsize, void *recvbuf, int root = 0);

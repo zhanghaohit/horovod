@@ -99,7 +99,7 @@ ClientSocket* ServerSocket::Accept() {
 int ClientSocket::Connect(bool blocking) {
   int rv;
   char portstr[6]; // strlen("65535") + 1;
-  addrinfo hints, *servinfo, *bservinfo, *p, *b;
+  addrinfo hints, *servinfo, *p;
 
   snprintf(portstr, sizeof(portstr), "%d", port_);
   memset(&hints, 0, sizeof(hints));
@@ -205,10 +205,23 @@ int ClientSocket::Recv(stringstream& ss, int size) {
   return nread;
 }
 
-int SocketCommunicator::Bcast(void *buffer, int size, int root) {
+int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vector<int> &ranks) {
   if (root == rank_) {  // master
-    for (auto &it : clients_) {
-      auto s = it.second->Send(buffer, size);
+    std::vector<int> to_bcast;
+    if (ranks.size() == 0) {
+      for (int i = 1; i < num_ranks_; i++) {
+        to_bcast.emplace_back(i);
+      }
+    } else {
+      to_bcast = ranks;
+    }
+
+    for (auto rank : to_bcast) {
+      if (clients_.count(rank) == 0) {
+        LOG(ERROR) << "Connection to rank " << rank << " does not exists";
+        continue;
+      }
+      auto s = clients_.at(rank)->Send(buffer, size);
       if (s != size) {
         LOG(ERROR) << "Bcast failed: sent " << s << " bytes data, expected " << size << " bytes data";
         return -1;
@@ -248,7 +261,6 @@ int SocketCommunicator::Barrier(int root) {
 
 int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
   // LOG(DEBUG, rank_) << "Gather " << sendsize << " from " << num_ranks_ << " members";
-  const char *sb = static_cast<const char*>(sendbuf);
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
     for (int i = 1; i < num_ranks_; i++) {
@@ -272,14 +284,12 @@ int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf,
 
 int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
                                 void *recvbuf, const int *recvsize, const int *displs, int root) {
-  const char *sb = static_cast<const char*>(sendbuf);
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
     assert(recvsize != nullptr);
     assert(recvbuf != nullptr);
     assert(displs != nullptr);
 
-    auto ret = recvsize[0];
     for (int i = 1; i < num_ranks_; i++) {
       // LOG(DEBUG, rank_) << "Gatherv " << recvsize[i] << " from " << i << " to offset " << displs[i];
       auto s = clients_.at(i)->Recv(rb + displs[i], recvsize[i]);

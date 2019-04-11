@@ -48,7 +48,6 @@ TEST(NetTest, SocketTest) {
 
 TEST(NetTest, CommTest) {
   std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
-
   int num_ranks = 3;
   for (auto &size : sizes) {
 
@@ -103,5 +102,33 @@ TEST(NetTest, CommTest) {
     for (int i = 0; i < num_ranks; i++) {
       threads[i].join();
     }
+  }
+}
+
+TEST(NetTest, SelectiveBcast) {
+  int num_ranks = 3;
+  std::vector<std::thread> threads;
+  string str(100, 'a');
+  int size = str.size();
+  std::vector<int> to_bcast = {2};
+  for (int i = 0; i < num_ranks; i++) {
+    threads.emplace_back(std::thread([&, rank=i]{
+      SocketCommunicator comm;
+      comm.Init(num_ranks, rank);
+      if (rank == 0) {
+        int ret = comm.Bcast(const_cast<char*>(str.data()), str.size(), 0, to_bcast);
+        EXPECT_EQ(ret, 0);
+      } else if (rank == 2) {
+        char *buf = new char[size];
+        int ret = comm.Bcast(buf, size);
+        EXPECT_EQ(ret, 0);
+        EXPECT_EQ(string(buf, size), str);
+        delete[] buf;
+      }
+    }));
+  }
+
+  for (int i = 0; i < num_ranks; i++) {
+    threads[i].join();
   }
 }

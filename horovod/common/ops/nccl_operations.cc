@@ -216,7 +216,6 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Resp
     InitNCCLComm(entries, response.devices());
     InitCUDAQueue(entries, response);
 
-
     global_state_->timeline.ActivityStartAll(entries, NCCL_BCAST);
     auto nccl_result = ncclBcast(data_ptr,
                        (int) e.tensor->shape().num_elements(),
@@ -230,7 +229,7 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Resp
     LOG(DEBUG) << "Using socket Bcast";
     // global_state_->timeline.ActivityStartAll(entries, NCCL_BCAST);
     auto ret = net_context_->comm.Bcast(
-        data_ptr, e.tensor->shape().num_elements() * GetSizeof(e.tensor), e.root_rank);
+        data_ptr, e.tensor->shape().num_elements() * GetSizeof(e.tensor), e.root_rank, e.ranks);
     if (ret != 0) {
       throw std::logic_error("Socket_Broadcast failed.");
     }

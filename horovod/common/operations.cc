@@ -179,7 +179,7 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 // Requests for that tensor is now equal to the MPI size (and thus we are
 // ready to reduce the tensor).
 bool IncrementTensorCount(std::unique_ptr<MessageTable>& message_table,
-                          const Request& msg, int mpi_size) {
+                          const Request& msg, int mpi_size, TensorTable& tensor_table) {
   auto& name = msg.tensor_name();
   auto& timeline = horovod_global.timeline;
   auto table_iter = message_table->find(name);
@@ -199,7 +199,21 @@ bool IncrementTensorCount(std::unique_ptr<MessageTable>& message_table,
 
   std::vector<Request>& messages = std::get<0>(table_iter->second);
   int count = (int)messages.size();
-  bool ready_to_reduce = count == mpi_size;
+  int size = mpi_size;
+  // for Broadcast, it allows to only broadcast to a subset of ranks
+  if (msg.request_type() == Request::BROADCAST) {
+    // Lock on the tensor table.
+    std::lock_guard<std::mutex> guard(horovod_global.mutex);
+    auto iter = tensor_table.find(name);
+    if (iter != tensor_table.end()) {
+      if (iter->second.ranks.size() != 0) {
+        size = iter->second.ranks.size() + 1;
+      }
+    } else {
+      LOG(DEBUG) << name << " not exists in the current tensor table";
+    }
+  }
+  bool ready_to_reduce = count == size;
   if (ready_to_reduce) {
     timeline.NegotiateEnd(name);
   }
@@ -468,14 +482,18 @@ int64_t TensorFusionThresholdBytes() {
 void PerformOperation(TensorTable& tensor_table, Response response) {
   std::vector<TensorTableEntry> entries;
   // Reserve to save re-allocation costs, as we know the size before.
-  entries.reserve(response.tensor_names().size());
+  // entries.reserve(response.tensor_names().size());
   {
     // Lock on the tensor table.
     std::lock_guard<std::mutex> guard(horovod_global.mutex);
     for (auto& name : response.tensor_names()) {
       // We should never fail at finding this key in the tensor table.
       auto iter = tensor_table.find(name);
-      assert(iter != tensor_table.end());
+      if (iter == tensor_table.end()) {
+        LOG(WARNING) << "tensor " << name << " not found";
+        assert(response.response_type() == Response::BROADCAST);
+        continue;
+      }
 
       assert(response.response_type() == Response::ALLREDUCE ||
              response.response_type() == Response::ALLGATHER ||
@@ -489,6 +507,7 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
       tensor_table.erase(iter);
     }
   }
+  if (entries.size() == 0) return;
 
   auto& timeline = horovod_global.timeline;
   for (auto& e : entries) {
@@ -1082,7 +1101,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
       message_queue.pop();
 
       bool reduce =
-          IncrementTensorCount(state.message_table, message, state.size);
+          IncrementTensorCount(state.message_table, message, state.size, state.tensor_table);
       if (reduce) {
         ready_to_reduce.push_back(message.tensor_name());
       }
@@ -1132,7 +1151,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
         auto& received_name = received_message.tensor_name();
 
         bool reduce = IncrementTensorCount(state.message_table,
-                                           received_message, state.size);
+                                           received_message, state.size, state.tensor_table);
         if (reduce) {
           ready_to_reduce.push_back(received_name);
         }
@@ -1420,6 +1439,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 // only done once no matter how many times this function is called.
 void InitializeHorovodOnce(const int* ranks, int nranks) {
 #if DYNAMIC_SCHEDULE
+  LOG(WARNING) << "Using Socket for communication";
   int num_ranks = 0;
   // FIXME(hzhang): get from central controller
   if (const char* env_p = std::getenv("HOROVOD_NUM_RANKS")) {
@@ -1428,6 +1448,8 @@ void InitializeHorovodOnce(const int* ranks, int nranks) {
     LOG(WARNING) << "HOROVOD_NUM_RANKS is not configured";
   }
   net_context.comm.Init(num_ranks);
+#else
+  LOG(WARNING) << "Using MPI for communication";
 #endif
   // Ensure background thread is only started once.
   if (!horovod_global.initialize_flag.test_and_set()) {
@@ -1601,7 +1623,7 @@ Status EnqueueTensorBroadcast(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> output, int root_rank,
                               std::shared_ptr<ReadyEvent> ready_event,
                               const std::string name, const int device,
-                              StatusCallback callback) {
+                              StatusCallback callback, const std::vector<int> &ranks) {
   Request message;
   message.set_request_rank(horovod_global.rank);
   message.set_tensor_name(name);
@@ -1622,6 +1644,7 @@ Status EnqueueTensorBroadcast(std::shared_ptr<OpContext> context,
   e.ready_event = ready_event;
   e.device = device;
   e.callback = callback;
+  e.ranks = ranks;
 
   std::lock_guard<std::mutex> guard(horovod_global.mutex);
   if (horovod_global.shut_down) {

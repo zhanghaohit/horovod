@@ -395,6 +395,7 @@ public:
   explicit HorovodBroadcastOp(OpKernelConstruction* context)
       : AsyncOpKernel(context) {
     OP_REQUIRES_OK(context, context->GetAttr("root_rank", &root_rank_));
+    OP_REQUIRES_OK(context, context->GetAttr("ranks", &ranks_));
   }
 
   void ComputeAsync(OpKernelContext* context, DoneCallback done) override {
@@ -424,12 +425,13 @@ public:
         device, [context, done](const common::Status& status) {
           context->SetStatus(ConvertStatus(status));
           done();
-        });
+        }, ranks_);
     OP_REQUIRES_OK_ASYNC(context, ConvertStatus(enqueue_result), done);
   }
 
 private:
   int root_rank_;
+  std::vector<int> ranks_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("HorovodBroadcast").Device(DEVICE_CPU),
@@ -443,6 +445,7 @@ REGISTER_OP("HorovodBroadcast")
     .Attr(
         "T: {uint8, int8, uint16, int16, int32, int64, float16, float32, float64, bool}")
     .Attr("root_rank: int")
+    .Attr("ranks: list(int)")
     .Input("tensor: T")
     .Output("output: T")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
