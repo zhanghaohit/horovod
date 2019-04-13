@@ -709,6 +709,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   // mpi4py can be used together with Horovod if multi-threaded MPI is
   // installed.
 #if !DYNAMIC_SCHEDULE
+  LOG(WARNING) << "Using MPI for communication";
   auto mpi_threads_disable = std::getenv(HOROVOD_MPI_THREADS_DISABLE);
   int required = MPI_THREAD_MULTIPLE;
   if (mpi_threads_disable != nullptr &&
@@ -749,6 +750,16 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     // MPI_COMM_WORLD
     MPI_Comm_dup(MPI_COMM_WORLD, &(ctx.mpi_comm));
   }
+#else
+  LOG(WARNING) << "Using Socket for communication";
+  int num_ranks = 0;
+  // FIXME(hzhang): get from central controller
+  if (const char* env_p = std::getenv("HOROVOD_NUM_RANKS")) {
+    num_ranks = std::stoi(env_p);
+  } else {
+    LOG(WARNING) << "HOROVOD_NUM_RANKS is not configured";
+  }
+  net_context.comm.Init(num_ranks);
 #endif
 
   // Get MPI rank to determine if we are rank zero.
@@ -772,10 +783,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   }
 
 #if DYNAMIC_SCHEDULE
-  int local_rank = 0, local_size = 1, cross_rank = 0, cross_size = 1;
-  for (int i = 0; i < size; i++) {
-    state.local_sizes.push_back(1);
-  }
+  // FIXME(hzhang): cal the real local rank
+  int local_rank = rank, local_size = size, cross_rank = 0, cross_size = 1;
   state.is_homogeneous = true;
 #else
   // Determine local rank by querying the local communicator.
@@ -830,6 +839,9 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   state.param_manager.CreateMpiTypes();
 #endif
 
+  LOG(INFO) << "state.is_homogeneous " << state.is_homogeneous <<
+      "state.local_size = " << local_size << ", local_rank = " << local_rank;
+
   state.rank = rank;
   state.local_rank = local_rank;
   state.cross_rank = cross_rank;
@@ -849,6 +861,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   ctx.mpi_comm = MPI_COMM_NULL;
   ctx.mpi_float16_t = MPI_DATATYPE_NULL;
   ctx.mpi_float16_sum = MPI_OP_NULL;
+  state.mpi_threads_supported = true;
 #endif
 
   // Open the timeline file on coordinator.
@@ -1114,12 +1127,15 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     // 1. Get message lengths from every rank.
     auto recvcounts = new int[state.size];
     recvcounts[0] = 0;
+    {
+      Timer t("Net Gather [" + std::to_string(state.rank) + "]");
 #if DYNAMIC_SCHEDULE
-    net_context.comm.Gather(nullptr, sizeof(int), recvcounts);
+      net_context.comm.Gather(nullptr, sizeof(int), recvcounts);
 #else
-    MPI_Gather(MPI_IN_PLACE, 1, MPI_INT, recvcounts, 1, MPI_INT, RANK_ZERO,
-               ctx.mpi_comm);
+      MPI_Gather(MPI_IN_PLACE, 1, MPI_INT, recvcounts, 1, MPI_INT, RANK_ZERO,
+                 ctx.mpi_comm);
 #endif
+    }
 
     // 2. Compute displacements.
     auto displcmnts = new int[state.size];
@@ -1135,12 +1151,15 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 
     // 3. Collect messages from every rank.
     auto buffer = new uint8_t[total_size];
+    {
+      Timer t("Net Gatherv [" + std::to_string(state.rank) + "]");
 #if DYNAMIC_SCHEDULE
-    net_context.comm.Gatherv(nullptr, 0, buffer, recvcounts, displcmnts);
+      net_context.comm.Gatherv(nullptr, 0, buffer, recvcounts, displcmnts);
 #else
-    MPI_Gatherv(nullptr, 0, MPI_BYTE, buffer, recvcounts, displcmnts, MPI_BYTE,
-                RANK_ZERO, ctx.mpi_comm);
+      MPI_Gatherv(nullptr, 0, MPI_BYTE, buffer, recvcounts, displcmnts, MPI_BYTE,
+                  RANK_ZERO, ctx.mpi_comm);
 #endif
+    }
 
     // 4. Process messages.
     for (int i = 1; i < state.size; ++i) {
@@ -1324,14 +1343,17 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     std::string encoded_response;
     ResponseList::SerializeToString(response_list, encoded_response);
     int encoded_response_length = (int)encoded_response.length() + 1;
+    {
+      Timer t("Net Bcast [" + std::to_string(state.rank) + "]");
 #if DYNAMIC_SCHEDULE
-    net_context.comm.Bcast(&encoded_response_length, sizeof(encoded_response_length));
-    net_context.comm.Bcast((void*)encoded_response.c_str(), encoded_response_length);
+      net_context.comm.Bcast(&encoded_response_length, sizeof(encoded_response_length));
+      net_context.comm.Bcast((void*)encoded_response.c_str(), encoded_response_length);
 #else
-    MPI_Bcast(&encoded_response_length, 1, MPI_INT, RANK_ZERO, ctx.mpi_comm);
-    MPI_Bcast((void*)encoded_response.c_str(), encoded_response_length,
-              MPI_BYTE, RANK_ZERO, ctx.mpi_comm);
+      MPI_Bcast(&encoded_response_length, 1, MPI_INT, RANK_ZERO, ctx.mpi_comm);
+      MPI_Bcast((void*)encoded_response.c_str(), encoded_response_length,
+                MPI_BYTE, RANK_ZERO, ctx.mpi_comm);
 #endif
+    }
 
     std::vector<std::string> tensor_names;
     int64_t total_tensor_size = 0;
@@ -1370,31 +1392,39 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     }
     RequestList::SerializeToString(message_list, encoded_message);
     int encoded_message_length = (int)encoded_message.length() + 1;
+    {
+      Timer t("Net Gather+v [" + std::to_string(state.rank) + "]");
 #if DYNAMIC_SCHEDULE
-    net_context.comm.Gather(&encoded_message_length, sizeof(encoded_message_length), nullptr);
-    net_context.comm.Gatherv((void*)encoded_message.c_str(), encoded_message_length,
-                             nullptr, nullptr, nullptr);
-
+      net_context.comm.Gather(&encoded_message_length, sizeof(encoded_message_length), nullptr);
+      net_context.comm.Gatherv((void*)encoded_message.c_str(), encoded_message_length,
+                               nullptr, nullptr, nullptr);
 #else
-    MPI_Gather(&encoded_message_length, 1, MPI_INT, nullptr, 1, MPI_INT,
-               RANK_ZERO, ctx.mpi_comm);
-    MPI_Gatherv((void*)encoded_message.c_str(), encoded_message_length,
-                MPI_BYTE, nullptr, nullptr, nullptr, MPI_BYTE, RANK_ZERO,
-                ctx.mpi_comm);
+      MPI_Gather(&encoded_message_length, 1, MPI_INT, nullptr, 1, MPI_INT,
+                 RANK_ZERO, ctx.mpi_comm);
+      MPI_Gatherv((void*)encoded_message.c_str(), encoded_message_length,
+                  MPI_BYTE, nullptr, nullptr, nullptr, MPI_BYTE, RANK_ZERO,
+                  ctx.mpi_comm);
 #endif
+    }
 
     int msg_length;
+    {
+      Timer t("Net Bcast1 [" + std::to_string(state.rank) + "]");
 #if DYNAMIC_SCHEDULE
-    net_context.comm.Bcast(&msg_length, sizeof(msg_length));
+      net_context.comm.Bcast(&msg_length, sizeof(msg_length));
 #else
-    MPI_Bcast(&msg_length, 1, MPI_INT, RANK_ZERO, ctx.mpi_comm);
+      MPI_Bcast(&msg_length, 1, MPI_INT, RANK_ZERO, ctx.mpi_comm);
 #endif
+    }
     auto buffer = new uint8_t[msg_length];
+    {
+      Timer t("Net Bcast2 [" + std::to_string(state.rank) + "]");
 #if DYNAMIC_SCHEDULE
-    net_context.comm.Bcast(buffer, msg_length);
+      net_context.comm.Bcast(buffer, msg_length);
 #else
-    MPI_Bcast(buffer, msg_length, MPI_BYTE, RANK_ZERO, ctx.mpi_comm);
+      MPI_Bcast(buffer, msg_length, MPI_BYTE, RANK_ZERO, ctx.mpi_comm);
 #endif
+    }
     ResponseList response_list;
     ResponseList::ParseFromBytes(response_list, buffer);
     delete[] buffer;
@@ -1438,19 +1468,6 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 // Start Horovod background thread. Ensure that this is
 // only done once no matter how many times this function is called.
 void InitializeHorovodOnce(const int* ranks, int nranks) {
-#if DYNAMIC_SCHEDULE
-  LOG(WARNING) << "Using Socket for communication";
-  int num_ranks = 0;
-  // FIXME(hzhang): get from central controller
-  if (const char* env_p = std::getenv("HOROVOD_NUM_RANKS")) {
-    num_ranks = std::stoi(env_p);
-  } else {
-    LOG(WARNING) << "HOROVOD_NUM_RANKS is not configured";
-  }
-  net_context.comm.Init(num_ranks);
-#else
-  LOG(WARNING) << "Using MPI for communication";
-#endif
   // Ensure background thread is only started once.
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {

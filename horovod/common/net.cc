@@ -8,8 +8,8 @@
 #include <cstdlib>
 #include <cassert>
 #include <boost/algorithm/string.hpp>
-#include <chrono>
 #include <thread>
+#include <netinet/tcp.h>
 #include "net.h"
 
 namespace horovod {
@@ -51,6 +51,14 @@ int ServerSocket::Listen() {
       return ST_ERROR;
     }
     freeaddrinfo(servinfo);
+    // set the port resuable
+    int reuse = 1;
+    if (setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+      perror("setsockopt(SO_REUSEADDR) failed");
+#ifdef SO_REUSEPORT
+    if (setsockopt(fd_, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
+      perror("setsockopt(SO_REUSEPORT) failed");
+#endif
     return ST_SUCCESS;
   }
   if (p == nullptr) {
@@ -93,6 +101,10 @@ ClientSocket* ServerSocket::Accept() {
   }
 
   LOG(DEBUG) << "accept " << cip << ":" << cport << " (socket = " << cfd << ")";
+
+  // set no buffer on the sender-side
+  int one = 1;
+  setsockopt(cfd, SOL_TCP, TCP_NODELAY, &one, sizeof(one));
   return new ClientSocket (string(cip), cport, cfd);
 }
 
@@ -134,6 +146,9 @@ int ClientSocket::Connect(bool blocking) {
       /* If we ended an iteration of the for loop without errors, we
        * have a connected socket. Let's return to the caller. */
       freeaddrinfo(servinfo);
+      // set no buffer on the sender-side
+      int one = 1;
+      setsockopt(fd_, SOL_TCP, TCP_NODELAY, &one, sizeof(one));
       return ST_SUCCESS;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -206,6 +221,7 @@ int ClientSocket::Recv(stringstream& ss, int size) {
 }
 
 int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vector<int> &ranks) {
+  Timer t("Broadcast [" + std::to_string(rank_) + "]");
   if (root == rank_) {  // master
     std::vector<int> to_bcast;
     if (ranks.size() == 0) {
@@ -260,6 +276,7 @@ int SocketCommunicator::Barrier(int root) {
 }
 
 int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
+  Timer t("Gather [" + std::to_string(rank_) + "]");
   // LOG(DEBUG, rank_) << "Gather " << sendsize << " from " << num_ranks_ << " members";
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
@@ -284,6 +301,7 @@ int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf,
 
 int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
                                 void *recvbuf, const int *recvsize, const int *displs, int root) {
+  Timer t("Gatherv [" + std::to_string(rank_) + "]");
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
     assert(recvsize != nullptr);

@@ -607,6 +607,10 @@ def get_common_options(build_ext):
     if dynamic_schedule:
         MACROS += [('DYNAMIC_SCHEDULE', '1')]
 
+    use_timer = os.environ.get('HOROVOD_USE_TIMER')
+    if use_timer:
+        MACROS += [('HOROVOD_USE_TIMER', '1')]
+
     return dict(MACROS=MACROS,
                 INCLUDES=INCLUDES,
                 SOURCES=SOURCES,

@@ -9,6 +9,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <chrono>
 #include "logging.h"
 
 namespace horovod {
@@ -24,6 +25,30 @@ using std::stringstream;
 #define ST_CLOSED 1
 #define ST_INPROCESS 2
 #define DEFAULT_RECV_SIZE 10240
+
+#if HOROVOD_USE_TIMER
+class Timer {
+ public:
+  Timer(const std::string &name) : name_(name) {
+    start_ = std::chrono::high_resolution_clock::now();
+  }
+
+  ~Timer() {
+    auto end = std::chrono::high_resolution_clock::now();
+    auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(end - start_).count();
+    if (microseconds > 1000) LOG(INFO) << name_ << ": " << microseconds;
+  }
+
+ private:
+  std::string name_;
+  std::chrono::time_point<std::chrono::high_resolution_clock> start_;
+};
+#else
+class Timer {
+ public:
+  Timer(const std::string &name) {}
+};
+#endif
 
 /*
  * Net socket class based on Linux TCP socket

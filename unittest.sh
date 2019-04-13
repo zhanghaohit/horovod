@@ -12,7 +12,7 @@ LIBS="-lpthread -lgtest -lgtest_main"
 
 if [[ $command == build ]]; then
   echo "compile unittest"
-  g++ -std=c++14 -g -o unittest horovod/test/*.cc $SRC $LIBS
+  g++ -std=c++14 -O2 -o unittest horovod/test/*.cc $SRC $LIBS
 elif [[ $command == run ]]; then
   echo "run unittest"
 fi

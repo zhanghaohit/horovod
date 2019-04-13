@@ -5,11 +5,12 @@ if [[ $# -ge 1 ]]; then
   mode=$1
 fi
 
-log_level=debug
+log_level=info
 master=sgrg0003:12345
 exe="python3 examples/tensorflow_mnist.py"
+# exe="python3 examples/tensorflow_synthetic_benchmark.py"
 
-for number in 2
+for number in 3
 do
   rm -rf checkpoints
   start_time=$(date +%s)

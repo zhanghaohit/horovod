@@ -74,8 +74,8 @@ NCCLAllreduce::NCCLAllreduce(NCCLContext* nccl_context,
                              CUDAContext* cuda_context,
                              HorovodGlobalState* global_state)
     : CUDAAllreduce(cuda_context, global_state), NCCLOp(nccl_context, net_context, global_state) {
-#if !DYNAMIC_SCHEDULE
   mpi_context_ = mpi_context;
+#if !DYNAMIC_SCHEDULE
   assert(net_context_ == nullptr);
   assert(mpi_context_ != nullptr);
 #endif
