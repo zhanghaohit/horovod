@@ -225,7 +225,9 @@ int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vecto
   if (root == rank_) {  // master
     std::vector<int> to_bcast;
     if (ranks.size() == 0) {
-      for (int i = 1; i < num_ranks_; i++) {
+      for (int i = 0; i < num_ranks_; i++) {
+        if (i == rank_) continue;
+
         to_bcast.emplace_back(i);
       }
     } else {
@@ -234,12 +236,12 @@ int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vecto
 
     for (auto rank : to_bcast) {
       if (clients_.count(rank) == 0) {
-        LOG(ERROR) << "Connection to rank " << rank << " does not exists";
+        LOG(ERROR, rank_) << "Connection to rank " << rank << " does not exists";
         continue;
       }
       auto s = clients_.at(rank)->Send(buffer, size);
       if (s != size) {
-        LOG(ERROR) << "Bcast failed: sent " << s << " bytes data, expected " << size << " bytes data";
+        LOG(ERROR, rank_) << "Bcast failed: sent " << s << " bytes data, expected " << size << " bytes data";
         return -1;
       }
     }
@@ -247,7 +249,7 @@ int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vecto
     assert(clients_.size() == 1);
     auto ret = clients_[0]->Recv(buffer, size);
     if (ret != size) {
-      LOG(ERROR) << "Bcast failed: received " << ret << " bytes data, expected " << size << " bytes data";
+      LOG(ERROR, rank_) << "Bcast failed: received " << ret << " bytes data, expected " << size << " bytes data";
       return -1;
     }
   }
@@ -259,7 +261,7 @@ int SocketCommunicator::Barrier(int root) {
     for (auto &it : clients_) {
       auto s = it.second->Send("b");
       if (s != 1) {
-        LOG(ERROR) << "[Rank " << rank_ << "] Barrier failed";
+        LOG(ERROR, rank_) << "Barrier failed";
         return -1;
       }
     }
@@ -268,7 +270,7 @@ int SocketCommunicator::Barrier(int root) {
     char buf;
     auto ret = clients_[0]->Recv(&buf, 1);
     if (ret != 1) {
-      LOG(ERROR) << "[Rank " << rank_ << "] Barrier failed";
+      LOG(ERROR, rank_) << "Barrier failed";
       return -1;
     }
   }
@@ -277,13 +279,14 @@ int SocketCommunicator::Barrier(int root) {
 
 int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
   Timer t("Gather [" + std::to_string(rank_) + "]");
-  // LOG(DEBUG, rank_) << "Gather " << sendsize << " from " << num_ranks_ << " members";
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
-    for (int i = 1; i < num_ranks_; i++) {
+    for (int i = 0; i < num_ranks_; i++) {
+      if (i == rank_) continue;
+
       auto s = clients_.at(i)->Recv(rb + i * sendsize, sendsize);
       if (s != sendsize) {
-        LOG(ERROR) << "Gather failed: received " << s
+        LOG(ERROR, rank_) << "Gather failed: received " << s
             << " bytes data, expected " << sendsize << " bytes data";
         return -1;
       }
@@ -291,12 +294,34 @@ int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf,
   } else {
     auto ret = clients_.at(0)->Send(sendbuf, sendsize);
     if (ret != sendsize) {
-      LOG(ERROR) << "Gather failed: sent " << ret
+      LOG(ERROR, rank_) << "Gather failed: sent " << ret
           << " bytes data, expected " << sendsize << " bytes data";
       return -1;
     }
   }
   return 0;
+}
+
+int SocketCommunicator::AllGather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
+  assert(sendbuf != nullptr);
+  assert(recvbuf != nullptr);
+
+  Timer t("AllGather [" + std::to_string(rank_) + "]");
+  int ret = Gather(sendbuf, sendsize, recvbuf, root);
+  if (ret != 0) {
+    LOG(ERROR, rank_) << "Gather failed";
+    return ret;
+  }
+
+  if (root == rank_) {  // master
+    // copy own data to the recvbuf
+    char *rb = static_cast<char*>(recvbuf);
+    memcpy(rb + sendsize * rank_, sendbuf, sendsize);
+
+    return Bcast(recvbuf, sendsize * num_ranks_, root);
+  } else {
+    return Bcast(recvbuf, sendsize * num_ranks_, root);
+  }
 }
 
 int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
@@ -308,22 +333,22 @@ int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
     assert(recvbuf != nullptr);
     assert(displs != nullptr);
 
-    for (int i = 1; i < num_ranks_; i++) {
-      // LOG(DEBUG, rank_) << "Gatherv " << recvsize[i] << " from " << i << " to offset " << displs[i];
+    for (int i = 0; i < num_ranks_; i++) {
+      if (i == rank_) continue;
+
       auto s = clients_.at(i)->Recv(rb + displs[i], recvsize[i]);
       if (s != recvsize[i]) {
-        LOG(ERROR) << "Gather failed: received " << s
+        LOG(ERROR, rank_) << "Gather failed: received " << s
             << " bytes data, expected " << recvsize[i] << " bytes data";
         return -1;
       }
     }
   } else {
-    // LOG(DEBUG, rank_) << "Gatherv " << sendsize << " from " << num_ranks_ << " members";
     assert(sendbuf != nullptr);
 
     auto ret = clients_.at(0)->Send(sendbuf, sendsize);
     if (ret != sendsize) {
-      LOG(ERROR) << "Gather failed: sent " << ret
+      LOG(ERROR, rank_) << "Gather failed: sent " << ret
           << " bytes data, expected " << sendsize << " bytes data";
       return -1;
     }
@@ -331,20 +356,20 @@ int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
   return 0;
 }
 
-int SocketCommunicator::Init(int num_ranks, int rank) {
+int SocketCommunicator::Init(int num_ranks, int rank, int root) {
   if (rank == -1) {
     if (const char* env_p = std::getenv("HOROVOD_RANK")) {
       rank_ = std::stoi(env_p);
     } else {
-      LOG(WARNING) << "HOROVOD_RANK is not configured";
+      LOG(WARNING, rank_) << "HOROVOD_RANK is not configured";
     }
   } else {
     rank_ = rank;
   }
   num_ranks_ = num_ranks;
-  LOG(INFO) << "Total ranks = " << num_ranks_ << ", HOROVOD_RANK = " << rank_;
+  LOG(INFO, rank_) << "Total ranks = " << num_ranks_;
 
-  if (rank_ == 0) {
+  if (rank_ == root) {
     is_master_ = true;
   } else {
     is_master_ = false;
@@ -358,21 +383,21 @@ int SocketCommunicator::Init(int num_ranks, int rank) {
     std::vector<string> tokens;
     boost::split(tokens, hp, boost::is_any_of(":"));
     if (tokens.size() < 2) {
-      LOG(ERROR) << "HOROVOD_MASTER format error: " << hp;
+      LOG(ERROR, rank_) << "HOROVOD_MASTER format error: " << hp;
       return -1;
     }
-    LOG(INFO) << "HOROVOD_MASTER is " << tokens[0] << ":" << tokens[1];
+    LOG(INFO, rank_) << "HOROVOD_MASTER is " << tokens[0] << ":" << tokens[1];
     master_ip_ = tokens[0];
     master_port_ = std::stoi(tokens[1]);
   } else {
-    LOG(ERROR) << "HOROVOD_MASTER is not configured";
+    LOG(ERROR, rank_) << "HOROVOD_MASTER is not configured";
     return -1;
   }
 
   // TODO(hzhang): if is_master is true, check its ip is the same as master_uri host
   // if master, create master socket and listen
   if (is_master_) {
-    LOG(INFO) << "Create master on " << master_ip_ << ":" << std::to_string(master_port_);
+    LOG(INFO, rank_) << "Create master on " << master_ip_ << ":" << std::to_string(master_port_);
     master_.reset(new ServerSocket(master_port_));
     master_->Listen();
 
@@ -383,7 +408,7 @@ int SocketCommunicator::Init(int num_ranks, int rank) {
       int rank = -1;
       // receive the worker's rank
       client->Recv(&rank, sizeof(int));
-      LOG(INFO) << "Connection from worker " << rank
+      LOG(INFO, rank_) << "Connection from worker " << rank
           << " (" << client->ip() << ":" << client->port() << ")";
       clients_.emplace(rank, std::move(client));
     }

@@ -2,6 +2,7 @@
 #define HOROVOD_COMMON_NET_H
 
 #include <string>
+#include <unistd.h>
 #include <iostream>
 #include <sstream>
 #include <sys/socket.h>
@@ -151,7 +152,7 @@ class ServerSocket: public Socket {
 class SocketCommunicator {
  public:
   ~SocketCommunicator();
-  int Init(int num_ranks, int rank = -1);
+  int Init(int num_ranks, int rank = -1, int root = 0);
 
   int Bcast(void *buffer, int size, int root = 0, const std::vector<int> &ranks = std::vector<int>());
 
@@ -162,6 +163,8 @@ class SocketCommunicator {
   int Gatherv(const void *sendbuf, int sendsize,
               void *recvbuf, const int *recvsize, const int *displs, int root = 0);
 
+  int AllGather(const void *sendbuf, int sendsize, void *recvbuf, int root = 0);
+
   int Barrier(int root = 0);
 
   int rank() const {
@@ -170,6 +173,32 @@ class SocketCommunicator {
 
   int num_ranks() const {
     return num_ranks_;
+  }
+
+  static uint64_t GetHostHash(const string &str) {
+    // Based on DJB2, result = result * 33 + char
+    uint64_t result = 5381;
+    for (char c : str) {
+      result = ((result << 5) + result) + c;
+    }
+    return result;
+  }
+
+  static std::string GetHostName() {
+    char hostname[1024];
+    auto ret = gethostname(hostname, 1024);
+    if (ret != 0) {
+      LOG(ERROR) << "gethostname failed";
+      return "";
+    }
+
+    for (int i = 0; i < 1024; i++) {
+      if (hostname[i] == '.') {
+        hostname[i] = '\0';
+        return std::string(hostname);
+      }
+    }
+    return std::string(hostname);
   }
 
  private:

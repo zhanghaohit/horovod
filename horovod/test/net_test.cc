@@ -50,11 +50,12 @@ TEST(NetTest, CommTest) {
   std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
   int num_ranks = 3;
   for (auto &size : sizes) {
-
     std::vector<std::thread> threads;
     std::vector<string> strs;
+    string gstr;
     for (int i = 0; i < num_ranks; i++) {
       strs.emplace_back(string(size, i));
+      gstr += strs.back();
     }
     for (int i = 0; i < num_ranks; i++) {
       threads.emplace_back(std::thread([&, rank=i]{
@@ -68,7 +69,7 @@ TEST(NetTest, CommTest) {
           memcpy(buf, strs[rank].data(), strs[rank].size());
           ret = comm.Gather(nullptr, strs[rank].size(), buf);
           EXPECT_EQ(ret, 0);
-          EXPECT_EQ(string(buf, size * num_ranks), strs[0] + strs[1] + strs[2]);
+          EXPECT_EQ(string(buf, size * num_ranks), gstr);
           delete[] buf;
 
           int displcmnts[num_ranks];
@@ -85,6 +86,12 @@ TEST(NetTest, CommTest) {
           ret = comm.Gatherv(nullptr, 0, buf, recvcounts, displcmnts);
           EXPECT_EQ(ret, 0);
           EXPECT_EQ(string(buf, size * (num_ranks - 1)), strs[1] + strs[2]);
+
+          buf = new char[size * num_ranks];
+          ret = comm.AllGather(strs[rank].data(), size, buf);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size * num_ranks), gstr);
+          delete[] buf;
         } else {
           char *buf = new char[size];
           int ret = comm.Bcast(buf, size);
@@ -97,6 +104,12 @@ TEST(NetTest, CommTest) {
 
           ret = comm.Gatherv(strs[rank].data(), strs[rank].size(), nullptr, nullptr, nullptr);
           EXPECT_EQ(ret, 0);
+
+          buf = new char[size * num_ranks];
+          ret = comm.AllGather(strs[rank].data(), size, buf);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size * num_ranks), gstr);
+          delete[] buf;
         }
       }));
     }

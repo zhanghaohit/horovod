@@ -784,8 +784,22 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 
 #if DYNAMIC_SCHEDULE
   // FIXME(hzhang): cal the real local rank
-  int local_rank = rank, local_size = size, cross_rank = 0, cross_size = 1;
-  state.is_homogeneous = true;
+  uint64_t host_hashs[size];
+  auto hostname = SocketCommunicator::GetHostName();
+  host_hashs[rank] = SocketCommunicator::GetHostHash(hostname);
+  net_context.comm.AllGather(&host_hashs[rank], sizeof(uint64_t), host_hashs);
+  int local_rank = -1, local_size = 0;
+  int cross_rank = -1, cross_size = 0;  // not related if not using mpi
+  for (int i = 0; i < size; i++) {
+    if (i == rank) {
+      local_rank = local_size;
+    }
+
+    if (host_hashs[i] == host_hashs[rank]) {
+      local_size++;
+    }
+  }
+  state.is_homogeneous = true;  // not related if not use mpi
 #else
   // Determine local rank by querying the local communicator.
   MPI_Comm local_comm;
@@ -839,8 +853,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   state.param_manager.CreateMpiTypes();
 #endif
 
-  LOG(INFO) << "state.is_homogeneous " << state.is_homogeneous <<
-      "state.local_size = " << local_size << ", local_rank = " << local_rank;
+  LOG(INFO, rank) << "total_rank " << size << ", local_size = "
+      << local_size << ", local_rank = " << local_rank;
 
   state.rank = rank;
   state.local_rank = local_rank;
