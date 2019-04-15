@@ -1522,12 +1522,20 @@ void horovod_init_comm(MPI_Comm comm) {
 }
 
 void horovod_shutdown() {
+  LOG(INFO) << "Shutdown horovod";
   if (horovod_global.background_thread.joinable()) {
     horovod_global.shut_down = true;
     horovod_global.background_thread.join();
     // Reset the initialization flag to allow restarting with horovod_init(...)
     horovod_global.initialize_flag.clear();
     horovod_global.shut_down = false;
+
+#if DYNAMIC_SCHEDULE
+    LOG(INFO) << "Destroy socket communicator";
+    net_context.comm.Destroy();
+#endif
+  } else {
+    LOG(ERROR) << "Cannot shutdown horovod";
   }
 }
 

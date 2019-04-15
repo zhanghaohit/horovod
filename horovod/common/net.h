@@ -154,6 +154,8 @@ class SocketCommunicator {
   ~SocketCommunicator();
   int Init(int num_ranks, int rank = -1, int root = 0);
 
+  void Destroy();
+
   int Bcast(void *buffer, int size, int root = 0, const std::vector<int> &ranks = std::vector<int>());
 
   // recvbuf should have allocated size >= size * num_ranks_
@@ -202,6 +204,7 @@ class SocketCommunicator {
   }
 
  private:
+  int root_ = 0;
   int rank_ = 0;
   int num_ranks_ = 0;
   bool is_master_ = false;
@@ -211,6 +214,15 @@ class SocketCommunicator {
   // rank to client map
   std::unordered_map<int, std::unique_ptr<ClientSocket>> clients_;
   std::unique_ptr<ServerSocket> master_;
+
+  void CheckRootConsistency(int root) {
+    if (root != root_) {
+      string msg = "Bcast root (" + std::to_string(root) + ") is not equal to init root ("
+          + std::to_string(root_) + ")";
+      LOG(ERROR) << msg;
+      throw std::invalid_argument(msg);
+    }
+  }
 };
 
 } // namespace common

@@ -221,6 +221,7 @@ int ClientSocket::Recv(stringstream& ss, int size) {
 }
 
 int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vector<int> &ranks) {
+  CheckRootConsistency(root);
   Timer t("Broadcast [" + std::to_string(rank_) + "]");
   if (root == rank_) {  // master
     std::vector<int> to_bcast;
@@ -247,7 +248,7 @@ int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vecto
     }
   } else {  // worker
     assert(clients_.size() == 1);
-    auto ret = clients_[0]->Recv(buffer, size);
+    auto ret = clients_.at(0)->Recv(buffer, size);
     if (ret != size) {
       LOG(ERROR, rank_) << "Bcast failed: received " << ret << " bytes data, expected " << size << " bytes data";
       return -1;
@@ -257,6 +258,7 @@ int SocketCommunicator::Bcast(void *buffer, int size, int root, const std::vecto
 }
 
 int SocketCommunicator::Barrier(int root) {
+  CheckRootConsistency(root);
   if (root == rank_) {  // master
     for (auto &it : clients_) {
       auto s = it.second->Send("b");
@@ -268,7 +270,7 @@ int SocketCommunicator::Barrier(int root) {
   } else {  // worker
     assert(clients_.size() == 1);
     char buf;
-    auto ret = clients_[0]->Recv(&buf, 1);
+    auto ret = clients_.at(0)->Recv(&buf, 1);
     if (ret != 1) {
       LOG(ERROR, rank_) << "Barrier failed";
       return -1;
@@ -278,6 +280,7 @@ int SocketCommunicator::Barrier(int root) {
 }
 
 int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
+  CheckRootConsistency(root);
   Timer t("Gather [" + std::to_string(rank_) + "]");
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
@@ -303,6 +306,7 @@ int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf,
 }
 
 int SocketCommunicator::AllGather(const void *sendbuf, int sendsize, void *recvbuf, int root) {
+  CheckRootConsistency(root);
   assert(sendbuf != nullptr);
   assert(recvbuf != nullptr);
 
@@ -326,6 +330,7 @@ int SocketCommunicator::AllGather(const void *sendbuf, int sendsize, void *recvb
 
 int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
                                 void *recvbuf, const int *recvsize, const int *displs, int root) {
+  CheckRootConsistency(root);
   Timer t("Gatherv [" + std::to_string(rank_) + "]");
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
@@ -357,6 +362,8 @@ int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
 }
 
 int SocketCommunicator::Init(int num_ranks, int rank, int root) {
+  root_ = root;
+
   if (rank == -1) {
     if (const char* env_p = std::getenv("HOROVOD_RANK")) {
       rank_ = std::stoi(env_p);
@@ -424,14 +431,30 @@ int SocketCommunicator::Init(int num_ranks, int rank, int root) {
 }
 
 SocketCommunicator::~SocketCommunicator() {
-  if (rank_ == 0) {
-    // FIXME(hzhang): find a better way to let client close first
-    sleep(1);
+  Destroy();
+}
+
+void SocketCommunicator::Destroy() {
+  if (rank_ == root_) {
+    // TODO(hzhang): no need to close the connection if the client is not evicted
+    // wait for all the other clients to close the connections first
+    for (auto &it : clients_) {
+      LOG(DEBUG, rank_) << "Wait for rank " << it.first << " to close";
+      it.second->Recv(1);
+    }
     clients_.clear();
     master_.reset();
   } else {
+    LOG(DEBUG, rank_) << "Rank " << rank_ << " closed";
     clients_.clear();
   }
+
+  // reset all members
+  rank_ = 0;
+  num_ranks_= 0;
+  is_master_ = false;
+  master_ip_.clear();
+  master_port_ = 0;
 }
 
 } // namespace common

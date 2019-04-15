@@ -41,6 +41,7 @@ void Broadcast(SocketCommunicator &comm, void *buf, int size) {
 TEST(NetTest, SocketTest) {
   std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
   for (auto &size : sizes) {
+    std::cout << "Run test for size " << size << std::endl;
     string str(size, 'a');
     SendRecv(str, str);
   }
@@ -50,6 +51,7 @@ TEST(NetTest, CommTest) {
   std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
   int num_ranks = 3;
   for (auto &size : sizes) {
+    std::cout << "Run test for size " << size << std::endl;
     std::vector<std::thread> threads;
     std::vector<string> strs;
     string gstr;
@@ -85,7 +87,7 @@ TEST(NetTest, CommTest) {
           buf = new char[size * (num_ranks - 1)];
           ret = comm.Gatherv(nullptr, 0, buf, recvcounts, displcmnts);
           EXPECT_EQ(ret, 0);
-          EXPECT_EQ(string(buf, size * (num_ranks - 1)), strs[1] + strs[2]);
+          EXPECT_EQ(string(buf, size * (num_ranks - 1)), gstr.substr(strs[rank].size()));
 
           buf = new char[size * num_ranks];
           ret = comm.AllGather(strs[rank].data(), size, buf);
@@ -227,3 +229,80 @@ TEST(NetTest, PerfTest) {
   }
 }
 
+TEST(NetTest, ReInitTest) {
+  std::vector<int> rank_choices = {1, 2, 3, 4};
+  int size = 1024;
+
+  SocketCommunicator comms[4];
+  for (auto &num_ranks: rank_choices) {
+    std::cout << "Run test for num_ranks " << num_ranks << std::endl;
+    std::vector<std::thread> threads;
+    std::vector<string> strs;
+    string gstr;
+    for (int i = 0; i < num_ranks; i++) {
+      strs.emplace_back(string(size, i));
+      gstr += strs.back();
+    }
+    for (int i = 0; i < num_ranks; i++) {
+      threads.emplace_back(std::thread([&, rank=i] {
+        auto &comm = comms[rank];
+        comm.Init(num_ranks, rank);
+        if (rank == 0) {
+          int ret = comm.Bcast(const_cast<char*>(strs[rank].data()), size);
+          EXPECT_EQ(ret, 0);
+
+          char *buf = new char[size * num_ranks];
+          memcpy(buf, strs[rank].data(), strs[rank].size());
+          ret = comm.Gather(nullptr, strs[rank].size(), buf);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size * num_ranks), gstr);
+          delete[] buf;
+
+          int displcmnts[num_ranks];
+          int recvcounts[num_ranks];
+          recvcounts[0] = 0;
+          for (int j = 1; j < num_ranks; j++) {
+            recvcounts[j] = strs[j].size();
+          }
+          displcmnts[0] = 0;
+          for (int j = 1; j < num_ranks; j++) {
+            displcmnts[j] = displcmnts[j - 1] +  recvcounts[j - 1];
+          }
+          buf = new char[size * (num_ranks - 1)];
+          ret = comm.Gatherv(nullptr, 0, buf, recvcounts, displcmnts);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size * (num_ranks - 1)), gstr.substr(strs[rank].size()));
+
+          buf = new char[size * num_ranks];
+          ret = comm.AllGather(strs[rank].data(), size, buf);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size * num_ranks), gstr);
+          delete[] buf;
+        } else {
+          char *buf = new char[size];
+          int ret = comm.Bcast(buf, size);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size), strs[0]);
+          delete[] buf;
+
+          ret = comm.Gather(strs[rank].data(), strs[rank].size(), nullptr);
+          EXPECT_EQ(ret, 0);
+
+          ret = comm.Gatherv(strs[rank].data(), strs[rank].size(), nullptr, nullptr, nullptr);
+          EXPECT_EQ(ret, 0);
+
+          buf = new char[size * num_ranks];
+          ret = comm.AllGather(strs[rank].data(), size, buf);
+          EXPECT_EQ(ret, 0);
+          EXPECT_EQ(string(buf, size * num_ranks), gstr);
+          delete[] buf;
+        }
+        comm.Destroy();
+      }));
+    }
+
+    for (int i = 0; i < num_ranks; i++) {
+      threads[i].join();
+    }
+  }
+}
