@@ -567,7 +567,10 @@ def get_common_options(build_ext):
                'horovod/common/optim/bayesian_optimization.cc',
                'horovod/common/optim/gaussian_process.cc',
                'horovod/common/logging.cc',
-               'horovod/common/net.cc']
+               'horovod/common/net.cc',
+               'horovod/common/controller_client.cc',
+               'horovod/common/grpcservice.grpc.pb.cc',
+               'horovod/common/grpcservice.pb.cc']
     COMPILE_FLAGS = cpp_flags + shlex.split(mpi_flags)
     LINK_FLAGS = link_flags + shlex.split(mpi_flags)
     LIBRARY_DIRS = []
@@ -606,6 +609,7 @@ def get_common_options(build_ext):
 
     if dynamic_schedule:
         MACROS += [('DYNAMIC_SCHEDULE', '1')]
+        LIBRARIES += ['protobuf', 'grpc++', 'grpc']
 
     use_timer = os.environ.get('HOROVOD_USE_TIMER')
     if use_timer:

@@ -46,3 +46,6 @@
 [submodule "third_party/flatbuffers"]
 	path = third_party/flatbuffers
 	url = https://github.com/google/flatbuffers.git
+[submodule "third_party/autobot-operator"]
+	path = third_party/autobot-operator
+	url = git@gitlab.yitu-inc.com:infra/aiplatform/autobot-operator.git

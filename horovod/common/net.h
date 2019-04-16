@@ -152,7 +152,7 @@ class ServerSocket: public Socket {
 class SocketCommunicator {
  public:
   ~SocketCommunicator();
-  int Init(int num_ranks, int rank = -1, int root = 0);
+  int Init(int rank, int num_ranks, const std::string &master_uri, int root = 0);
 
   void Destroy();
 
@@ -202,6 +202,8 @@ class SocketCommunicator {
     }
     return std::string(hostname);
   }
+
+  static std::string GetIp(const std::string &iface = "");
 
  private:
   int root_ = 0;

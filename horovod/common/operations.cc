@@ -42,6 +42,10 @@
 #include "logging.h"
 #include "net.h"
 
+#if DYNAMIC_SCHEDULE
+#include "controller_client.h"
+#endif
+
 #if HAVE_CUDA
 #include "ops/cuda_operations.h"
 #include "ops/mpi_cuda_operations.h"
@@ -92,7 +96,9 @@ HorovodGlobalState horovod_global;
 MPIContext mpi_context;
 
 #if DYNAMIC_SCHEDULE
+constexpr int kDefaultPort = 12345;
 SocketContext net_context;
+std::unique_ptr<ControllerClient> ctl_client_;
 #endif
 
 #if HAVE_CUDA
@@ -660,6 +666,15 @@ bool CheckForStalledTensors(HorovodGlobalState& state, MPIContext& ctx) {
   return should_shut_down;
 }
 
+string GetEnv(const char *name) {
+  if (const char *env_p = std::getenv(name)) {
+    return env_p;
+  } else {
+    LOG(ERROR) << name << " is not configured";
+    return "";
+  }
+}
+
 void set_bool_from_env(const char* env, bool& val, bool value_if_set) {
   auto env_value = std::getenv(env);
   if (env_value != nullptr &&
@@ -750,26 +765,52 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     // MPI_COMM_WORLD
     MPI_Comm_dup(MPI_COMM_WORLD, &(ctx.mpi_comm));
   }
+  int rank;
+  MPI_Comm_rank(ctx.mpi_comm, &rank);
+  bool is_coordinator = rank == 0;
 #else
+  if (!ctl_client_) {
+    string ctl_uri = GetEnv("AUTOBOT_CONTROLLER_URI");;
+    string job_name = GetEnv("AUTOBOT_JOB_NAME");
+    string ns_name = GetEnv("AUTOBOT_JOB_NAMESPACE");
+    if (ctl_uri.empty() || job_name.empty() || ns_name.empty()) {
+      LOG(ERROR) << "Autobot central controller uri is not defined. Will fall back to use env settings";
+    } else {
+      ctl_client_.reset(new ControllerClient(ctl_uri));
+      ctl_client_->set_job_name(job_name);
+      ctl_client_->set_namespace_name(ns_name);
+    }
+  }
+
+  int rank = std::stoi(GetEnv("AUTOBOT_RANK"));
+  bool is_coordinator = rank == 0;
+
   LOG(WARNING) << "Using Socket for communication";
   int num_ranks = 0;
-  // FIXME(hzhang): get from central controller
-  if (const char* env_p = std::getenv("HOROVOD_NUM_RANKS")) {
-    num_ranks = std::stoi(env_p);
-  } else {
-    LOG(WARNING) << "HOROVOD_NUM_RANKS is not configured";
+  string master_uri;
+  if (is_coordinator) {
+    // get its local ip
+    master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
   }
-  net_context.comm.Init(num_ranks);
-#endif
 
-  // Get MPI rank to determine if we are rank zero.
-  int rank;
-#if DYNAMIC_SCHEDULE
-  rank = net_context.comm.rank();
-#else
-  MPI_Comm_rank(ctx.mpi_comm, &rank);
+  if (ctl_client_) {
+    num_ranks = ctl_client_->GetNumOfRanks();
+    if (is_coordinator) {
+      ctl_client_->SetMasterURI(master_uri);
+    } else {
+      master_uri = ctl_client_->GetMasterURI();
+    }
+    LOG(INFO) << "From central controller: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
+  } else {
+    num_ranks = std::stoi(GetEnv("AUTOBOT_NUM_RANKS"));
+    if (!is_coordinator) {
+      master_uri = GetEnv("AUTOBOT_MASTER_URI");
+      if (master_uri.empty())
+        throw std::invalid_argument("Cannot get master uri for either central controller or env");
+    }
+  }
+  net_context.comm.Init(rank, num_ranks, master_uri);
 #endif
-  bool is_coordinator = rank == 0;
 
   // Get MPI size to determine how many tensors to wait for before reducing.
   int size;

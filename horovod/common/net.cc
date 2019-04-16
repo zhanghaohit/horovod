@@ -1,3 +1,5 @@
+#include "net.h"
+
 #include <sys/types.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -10,7 +12,10 @@
 #include <boost/algorithm/string.hpp>
 #include <thread>
 #include <netinet/tcp.h>
-#include "net.h"
+#include <ifaddrs.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 namespace horovod {
 namespace common {
@@ -361,18 +366,9 @@ int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
   return 0;
 }
 
-int SocketCommunicator::Init(int num_ranks, int rank, int root) {
+int SocketCommunicator::Init(int rank, int num_ranks, const string &master_uri, int root) {
   root_ = root;
-
-  if (rank == -1) {
-    if (const char* env_p = std::getenv("HOROVOD_RANK")) {
-      rank_ = std::stoi(env_p);
-    } else {
-      LOG(WARNING, rank_) << "HOROVOD_RANK is not configured";
-    }
-  } else {
-    rank_ = rank;
-  }
+  rank_ = rank;
   num_ranks_ = num_ranks;
   LOG(INFO, rank_) << "Total ranks = " << num_ranks_;
 
@@ -382,26 +378,16 @@ int SocketCommunicator::Init(int num_ranks, int rank, int root) {
     is_master_ = false;
   }
 
-  // FIXME(hzhang):
-  // 1. for master, put the master ip:port to the central controller
-  // 2. for worker, get the master ip:port from the central controller
-  if (const char* env_p = std::getenv("HOROVOD_MASTER")) {
-    string hp(env_p);
-    std::vector<string> tokens;
-    boost::split(tokens, hp, boost::is_any_of(":"));
-    if (tokens.size() < 2) {
-      LOG(ERROR, rank_) << "HOROVOD_MASTER format error: " << hp;
-      return -1;
-    }
-    LOG(INFO, rank_) << "HOROVOD_MASTER is " << tokens[0] << ":" << tokens[1];
-    master_ip_ = tokens[0];
-    master_port_ = std::stoi(tokens[1]);
-  } else {
-    LOG(ERROR, rank_) << "HOROVOD_MASTER is not configured";
+  std::vector<string> tokens;
+  boost::split(tokens, master_uri, boost::is_any_of(":"));
+  if (tokens.size() < 2) {
+    LOG(ERROR, rank_) << "master uri format error: " << master_uri;
     return -1;
   }
+  LOG(INFO, rank_) << "master uri is " << tokens[0] << ":" << tokens[1];
+  master_ip_ = tokens[0];
+  master_port_ = std::stoi(tokens[1]);
 
-  // TODO(hzhang): if is_master is true, check its ip is the same as master_uri host
   // if master, create master socket and listen
   if (is_master_) {
     LOG(INFO, rank_) << "Create master on " << master_ip_ << ":" << std::to_string(master_port_);
@@ -455,6 +441,59 @@ void SocketCommunicator::Destroy() {
   is_master_ = false;
   master_ip_.clear();
   master_port_ = 0;
+}
+
+std::string SocketCommunicator::GetIp(const std::string &iface) {
+  const char *interface = iface.data();
+  if (iface.empty()) {
+    char line[100];
+    FILE *f = fopen("/proc/net/route" , "r");
+    while (fgets(line , 100 , f)) {
+      interface = strtok(line, " \t");
+      char *c = strtok(nullptr, " \t");
+      if (interface != nullptr && c != nullptr) {
+        if (strcmp(c , "00000000") == 0) {
+          LOG(INFO) << "Using default interface is " << interface;
+          break;
+        }
+      }
+    }
+  }
+
+  // which family do we require , AF_INET or AF_INET6
+  int fm = AF_INET;
+  char ip[NI_MAXHOST];
+
+  ifaddrs *ifaddr = nullptr;
+  if (getifaddrs(&ifaddr) == -1) {
+    auto msg = strerror(errno);
+    LOG(ERROR) << "getifaddrs error: " << msg;
+    return "";
+  }
+
+  // Walk through linked list, maintaining head pointer so we can free list later
+  for (auto ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+    if (ifa->ifa_addr == nullptr) {
+      continue;
+    }
+
+    int family = ifa->ifa_addr->sa_family;
+    if (strcmp(ifa->ifa_name, interface) == 0) {
+      if (family == fm) {
+        int s = getnameinfo(ifa->ifa_addr, (family == AF_INET) ? sizeof(sockaddr_in)
+                            : sizeof(sockaddr_in6), ip, NI_MAXHOST, nullptr, 0, NI_NUMERICHOST);
+        if (s != 0) {
+          auto msg = gai_strerror(s);
+          LOG(ERROR) << "getnameinfo failed: " << msg;
+          return "";
+        }
+        LOG(INFO) << "Local Ip is " << ip;
+      }
+    }
+  }
+
+  freeifaddrs(ifaddr);
+  return ip;
 }
 
 } // namespace common

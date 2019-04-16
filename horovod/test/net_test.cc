@@ -4,12 +4,12 @@
 #include <vector>
 
 using namespace horovod::common;
+constexpr int kDefaultPort = 12345;
 
 void SendRecv(const string &cstr, const string &sstr) {
-  int port = 12345;
-  ServerSocket server_socket(port);
+  ServerSocket server_socket(kDefaultPort);
   ClientSocket *csocket = nullptr;
-  std::thread server([&server_socket, port, &cstr, &sstr, &csocket] {
+  std::thread server([&server_socket, &cstr, &sstr, &csocket] {
     server_socket.Listen();
     csocket = server_socket.Accept();
     auto recv = csocket->Recv(cstr.size());
@@ -20,7 +20,7 @@ void SendRecv(const string &cstr, const string &sstr) {
     csocket->Send(sstr);
   });
 
-  ClientSocket socket("localhost", port);
+  ClientSocket socket("localhost", kDefaultPort);
   socket.Connect();
   socket.Send(cstr);
   socket.Send(cstr);
@@ -48,8 +48,10 @@ TEST(NetTest, SocketTest) {
 }
 
 TEST(NetTest, CommTest) {
+  auto master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
   std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
   int num_ranks = 3;
+
   for (auto &size : sizes) {
     std::cout << "Run test for size " << size << std::endl;
     std::vector<std::thread> threads;
@@ -62,7 +64,7 @@ TEST(NetTest, CommTest) {
     for (int i = 0; i < num_ranks; i++) {
       threads.emplace_back(std::thread([&, rank=i]{
         SocketCommunicator comm;
-        comm.Init(num_ranks, rank);
+        comm.Init(rank, num_ranks, master_uri);
         if (rank == 0) {
           int ret = comm.Bcast(const_cast<char*>(strs[rank].data()), size);
           EXPECT_EQ(ret, 0);
@@ -123,6 +125,7 @@ TEST(NetTest, CommTest) {
 }
 
 TEST(NetTest, SelectiveBcast) {
+  auto master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
   int num_ranks = 3;
   std::vector<std::thread> threads;
   string str(100, 'a');
@@ -131,7 +134,7 @@ TEST(NetTest, SelectiveBcast) {
   for (int i = 0; i < num_ranks; i++) {
     threads.emplace_back(std::thread([&, rank=i]{
       SocketCommunicator comm;
-      comm.Init(num_ranks, rank);
+      comm.Init(rank, num_ranks, master_uri);
       if (rank == 0) {
         int ret = comm.Bcast(const_cast<char*>(str.data()), str.size(), 0, to_bcast);
         EXPECT_EQ(ret, 0);
@@ -151,6 +154,7 @@ TEST(NetTest, SelectiveBcast) {
 }
 
 TEST(NetTest, PerfTest) {
+  auto master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
   std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000};
   int num_ranks = 3;
   int iter = 1000;
@@ -165,7 +169,7 @@ TEST(NetTest, PerfTest) {
     for (int i = 0; i < num_ranks; i++) {
       threads.emplace_back(std::thread([&, rank=i] {
         SocketCommunicator comm;
-        comm.Init(num_ranks, rank);
+        comm.Init(rank, num_ranks, master_uri);
 
         auto start = std::chrono::high_resolution_clock::now();
         if (rank == 0) {
@@ -230,6 +234,7 @@ TEST(NetTest, PerfTest) {
 }
 
 TEST(NetTest, ReInitTest) {
+  auto master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
   std::vector<int> rank_choices = {1, 2, 3, 4};
   int size = 1024;
 
@@ -246,7 +251,7 @@ TEST(NetTest, ReInitTest) {
     for (int i = 0; i < num_ranks; i++) {
       threads.emplace_back(std::thread([&, rank=i] {
         auto &comm = comms[rank];
-        comm.Init(num_ranks, rank);
+        comm.Init(rank, num_ranks, master_uri);
         if (rank == 0) {
           int ret = comm.Bcast(const_cast<char*>(strs[rank].data()), size);
           EXPECT_EQ(ret, 0);

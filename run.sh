@@ -12,7 +12,12 @@ log_level=info
 port=12345
 exe="python3 examples/tensorflow_mnist.py"
 pythonpath=$bin/build/lib.linux-x86_64-3.5
+echo "pythonpath = " $pythonpath
 # exe="python3 examples/tensorflow_synthetic_benchmark.py"
+
+job_name="example-autobotjob"
+ns_name="video-structure"
+controller_uri="10.80.22.18:9001"
 
 old_IFS=$IFS
 IFS=$'\n'
@@ -34,12 +39,11 @@ do
 done
 IFS=$old_IFS
 
-for number in 4
+for number in 2
 do
   rm -rf checkpoints
   start_time=$(date +%s)
   if [[ $mode = mpi ]]; then
-    echo "pythonpath = " $pythonpath
     echo "Using MPI"
     mpirun -np $number -hostfile hosts --mca btl_tcp_if_include bond0 --mca oob_tcp_if_include bond0 -x PYTHONPATH=$pythonpath -x NCCL_SOCKET_IFNAME=bond0 -x HOROVOD_LOG_LEVEL=$log_level $exe
   else
@@ -57,7 +61,8 @@ do
       for i in $(seq 0 $((slot-1)))
       do
         echo "Running rank-$rank on $host:$slot-$i"
-        ssh $host "cd $bin; PYTHONPATH=$pythonpath NCCL_SOCKET_IFNAME=bond0 HOROVOD_LOG_LEVEL=$log_level HOROVOD_MASTER=$master HOROVOD_NUM_RANKS=$number HOROVOD_RANK=$rank $exe" &
+        # ssh $host "cd $bin; LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$pythonpath NCCL_SOCKET_IFNAME=bond0 HOROVOD_LOG_LEVEL=$log_level AUTOBOT_MASTER_URI=$master AUTOBOT_NUM_RANKS=$number AUTOBOT_RANK=$rank $exe" &
+        ssh $host "cd $bin; AUTOBOT_CONTROLLER_URI=$controller_uri AUTOBOT_JOB_NAME=$job_name AUTOBOT_JOB_NAMESPACE=$ns_name LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$pythonpath NCCL_SOCKET_IFNAME=bond0 HOROVOD_LOG_LEVEL=$log_level AUTOBOT_MASTER_URI=$master AUTOBOT_NUM_RANKS=$number AUTOBOT_RANK=$rank $exe" &
         rank=$((rank+1))
         if [[ $rank = $number ]]; then
           break

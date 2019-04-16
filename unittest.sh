@@ -7,8 +7,8 @@ fi
 
 command=$1
 
-SRC="horovod/common/net.cc horovod/common/logging.cc"
-LIBS="-lpthread -lgtest -lgtest_main"
+SRC="horovod/common/net.cc horovod/common/logging.cc horovod/common/controller_client.cc horovod/common/grpcservice*.cc"
+LIBS="-lpthread -lgtest -lgtest_main -lprotobuf -lgrpc++ -lstdc++"
 
 if [[ $command == build ]]; then
   echo "compile unittest"
