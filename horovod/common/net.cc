@@ -193,12 +193,13 @@ int ClientSocket::Recv(void* buf, int size) {
   while (totlen != size) {
     nread = read(fd_, p, size - totlen);
     if (nread == 0) {
-      LOG(INFO) << "socket " << fd_ << " has been closed";
+      LOG(INFO) << ip_ << ":" << port_ << " has been closed";
       break;
     }
     if (nread == -1) {
       // TODO(hzhang): EAGAIN handle
-      LOG(INFO) << "read socket " << fd_ << " failed: " << strerror(errno) << " (errno = " << errno << ")";
+      LOG(INFO) << "read from " << ip_ << ":" << port_ << " failed: "
+          << strerror(errno) << " (errno = " << errno << ")";
       break;
     }
 
@@ -411,6 +412,8 @@ int SocketCommunicator::Init(int rank, int num_ranks, const string &master_uri, 
     clients_.at(0)->Connect();
     // send its own rank to master
     clients_.at(0)->Send(&rank_, sizeof(int));
+
+    LOG(DEBUG, rank_) << "Connected with master";
   }
 
   return 0;
@@ -421,17 +424,23 @@ SocketCommunicator::~SocketCommunicator() {
 }
 
 void SocketCommunicator::Destroy() {
+  string cl = "close";
   if (rank_ == root_) {
     // TODO(hzhang): no need to close the connection if the client is not evicted
     // wait for all the other clients to close the connections first
+    master_.reset();  // close the master socket first in case clients connected in next phase
     for (auto &it : clients_) {
+      it.second->Send(cl.data(), cl.size());
       LOG(DEBUG, rank_) << "Wait for rank " << it.first << " to close";
       it.second->Recv(1);
     }
     clients_.clear();
-    master_.reset();
   } else {
     LOG(DEBUG, rank_) << "Rank " << rank_ << " closed";
+    auto recv = clients_.at(0)->Recv(cl.size());
+    if (recv != cl) {
+      LOG(ERROR) << "Communicator close error. Close command received: " << recv;
+    }
     clients_.clear();
   }
 

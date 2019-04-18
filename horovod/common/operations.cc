@@ -44,6 +44,7 @@
 
 #if DYNAMIC_SCHEDULE
 #include "controller_client.h"
+#include "ops/socket_operations.h"
 #endif
 
 #if HAVE_CUDA
@@ -147,9 +148,11 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 #else
   #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
     #if DYNAMIC_SCHEDULE
-      LOG(INFO) << "Enable Dynamic NCCLAllReduce";
+      LOG(INFO, state.rank) << "Enable Dynamic NCCLAllReduce";
       allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
           new NCCLAllreduce(&nccl_context, nullptr, &net_context, &cuda_context, &state)));
+      LOG(INFO, state.rank) << "Enable SocketAllReduce";
+      allgather_ops.push_back(std::shared_ptr<AllgatherOp>(new SocketAllgather(&net_context, &state)));
     #else
       allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
           new NCCLHierarchicalAllreduce(&nccl_context, &mpi_context, &cuda_context, &state)));
@@ -171,7 +174,7 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 
 #if DYNAMIC_SCHEDULE
   // FIXME(hzhang): add ifdef to choose
-  LOG(INFO) << "Enable Dynamic Broadcast";
+  LOG(INFO, state.rank) << "Enable Dynamic Broadcast";
   broadcast_ops.push_back(std::shared_ptr<BroadcastOp>(
           new NCCLBroadcast(&nccl_context, &net_context, &cuda_context, &state)));
 #endif
@@ -493,8 +496,9 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
     // Lock on the tensor table.
     std::lock_guard<std::mutex> guard(horovod_global.mutex);
     for (auto& name : response.tensor_names()) {
-      // We should never fail at finding this key in the tensor table.
       auto iter = tensor_table.find(name);
+      // We may fail at finding this key in the tensor table.
+      // as broadcast may only target to a subset of ranks
       if (iter == tensor_table.end()) {
         LOG(WARNING) << "tensor " << name << " not found";
         assert(response.response_type() == Response::BROADCAST);
@@ -769,23 +773,25 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   MPI_Comm_rank(ctx.mpi_comm, &rank);
   bool is_coordinator = rank == 0;
 #else
+  auto rstr = GetEnv("AUTOBOT_RANK");
+  int rank = rstr.empty() ? 0 : std::stoi(rstr);
+  bool is_coordinator = rank == 0;
+
   if (!ctl_client_) {
     string ctl_uri = GetEnv("AUTOBOT_CONTROLLER_URI");;
     string job_name = GetEnv("AUTOBOT_JOB_NAME");
     string ns_name = GetEnv("AUTOBOT_JOB_NAMESPACE");
     if (ctl_uri.empty() || job_name.empty() || ns_name.empty()) {
-      LOG(ERROR) << "Autobot central controller uri is not defined. Will fall back to use env settings";
+      LOG(ERROR, rank) << "Autobot central controller uri is not defined. Will fall back to use env settings";
     } else {
       ctl_client_.reset(new ControllerClient(ctl_uri));
       ctl_client_->set_job_name(job_name);
       ctl_client_->set_namespace_name(ns_name);
+      ctl_client_->set_rank(rank);
     }
   }
 
-  int rank = std::stoi(GetEnv("AUTOBOT_RANK"));
-  bool is_coordinator = rank == 0;
-
-  LOG(WARNING) << "Using Socket for communication";
+  LOG(WARNING, rank) << "Using Socket for communication";
   int num_ranks = 0;
   string master_uri;
   if (is_coordinator) {
@@ -802,7 +808,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     }
     LOG(INFO) << "From central controller: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
   } else {
-    num_ranks = std::stoi(GetEnv("AUTOBOT_NUM_RANKS"));
+    auto nrstr = GetEnv("AUTOBOT_NUM_RANKS");
+    num_ranks = nrstr.empty() ? 1 : std::stoi(nrstr);
     if (!is_coordinator) {
       master_uri = GetEnv("AUTOBOT_MASTER_URI");
       if (master_uri.empty())
@@ -1077,6 +1084,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   }
 
   horovod_global.param_manager.FreeMpiTypes();
+
+#if DYNAMIC_SCHEDULE
+    LOG(INFO, horovod_global.rank) << "Destroy socket communicator";
+    net_context.comm.Destroy();
+#endif
 
   if (horovod_global.should_finalize) {
 #if HAVE_DDL
@@ -1553,6 +1565,63 @@ Status CheckInitialized() {
 
 extern "C" {
 
+#if DYNAMIC_SCHEDULE
+using namespace grpcservice;
+int horovod_get_action() {
+  ActionReply reply;
+  if (horovod_global.rank == 0) {
+    reply = ctl_client_->GetAction();
+
+    string buf;
+    reply.SerializeToString(&buf);
+    int size = buf.size();
+    int ret = net_context.comm.Bcast(&size, sizeof(size));
+    if (ret != 0) {
+      throw std::runtime_error("Bcast action reply size failed");
+    }
+    ret = net_context.comm.Bcast(const_cast<char*>(buf.data()), buf.size());
+    if (ret != 0) {
+      throw std::runtime_error("Bcast action reply failed");
+    }
+
+    return reply.action();
+  } else {
+    int size = -1;
+    auto ret = net_context.comm.Bcast(&size, sizeof(size));
+    if (ret != 0) {
+      throw std::runtime_error("Bcast action reply size failed");
+    }
+    auto buf = new char[size];
+    ret = net_context.comm.Bcast(buf, size);
+    if (ret != 0) {
+      throw std::runtime_error("Bcast action reply failed");
+    }
+
+    reply.ParseFromString(string(buf, size));
+    delete[] buf;
+
+    auto action = reply.action();
+    if (action == NUM_NODE_REDUCED) {
+      for (auto i : reply.nodelist()) {
+        if (i == horovod_global.rank) {
+          return SHOULD_STOP;
+        }
+      }
+    }
+    return action;
+  }
+}
+
+void horovod_graph_ready() {
+  ctl_client_->GraphReady();
+}
+
+void horovod_ready_to_stop() {
+  ctl_client_->ReadyToStop();
+}
+
+#endif
+
 void horovod_init(const int* ranks, int nranks) {
   InitializeHorovodOnce(ranks, nranks);
 }
@@ -1563,20 +1632,15 @@ void horovod_init_comm(MPI_Comm comm) {
 }
 
 void horovod_shutdown() {
-  LOG(INFO) << "Shutdown horovod";
+  LOG(INFO, horovod_global.rank) << "Shutdown horovod";
   if (horovod_global.background_thread.joinable()) {
     horovod_global.shut_down = true;
     horovod_global.background_thread.join();
     // Reset the initialization flag to allow restarting with horovod_init(...)
     horovod_global.initialize_flag.clear();
     horovod_global.shut_down = false;
-
-#if DYNAMIC_SCHEDULE
-    LOG(INFO) << "Destroy socket communicator";
-    net_context.comm.Destroy();
-#endif
   } else {
-    LOG(ERROR) << "Cannot shutdown horovod";
+    LOG(ERROR, horovod_global.rank) << "Cannot shutdown horovod";
   }
 }
 

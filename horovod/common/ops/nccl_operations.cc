@@ -37,24 +37,6 @@ ncclDataType_t GetNCCLDataType(const std::shared_ptr<Tensor> tensor) {
   }
 }
 
-int GetSizeof(const std::shared_ptr<Tensor> &tensor) {
-  switch (tensor->dtype()) {
-    case HOROVOD_INT32:
-      return 4;
-    case HOROVOD_INT64:
-      return 8;
-    case HOROVOD_FLOAT16:
-      return 2;
-    case HOROVOD_FLOAT32:
-      return 4;
-    case HOROVOD_FLOAT64:
-      return 8;
-    default:
-      throw std::logic_error("Type " + DataType_Name(tensor->dtype()) +
-                             " is not supported in NCCL mode.");
-  }
-}
-
 void NCCLContext::ErrorCheck(std::string op_name, ncclResult_t nccl_result) {
   if (nccl_result != ncclSuccess) {
     throw std::logic_error(std::string(op_name) + " failed: " + ncclGetErrorString(nccl_result));
@@ -212,6 +194,9 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Resp
 
   if (entries[0].device != CPU_DEVICE_ID) {
     LOG(DEBUG) << "Using ncclBcast";
+    if (!e.ranks.empty()) {
+      LOG(ERROR) << "Partial broadcast is not supported for GPU data";
+    }
     InitCUDA(entries);
     InitNCCLComm(entries, response.devices());
     InitCUDAQueue(entries, response);

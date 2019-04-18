@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include "mpi_context.h"
+#include "ops/collective_operations.h"
 
 namespace horovod {
 namespace common {
@@ -72,9 +73,13 @@ MPI_Comm MPIContext::GetMPICommunicator(Communicator comm) {
 }
 
 int MPIContext::GetMPITypeSize(DataType dtype) {
+#if DYNAMIC_SCHEDULE
+  return HorovodOp::GetSizeof(dtype);
+#else
   int out;
   MPI_Type_size(GetMPIDataType(dtype), &out);
   return out;
+#endif
 }
 
 } // namespace common

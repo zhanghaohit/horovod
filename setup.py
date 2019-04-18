@@ -505,7 +505,7 @@ def get_common_options(build_ext):
     if dynamic_schedule:
         gpu_allreduce = 'NCCL'
         # gpu_allgather = 'NCCL'
-        # gpu_broadcast = 'NCCL'
+        gpu_broadcast = 'NCCL'
 
     if gpu_allreduce or gpu_allgather or gpu_broadcast:
         have_cuda = True
@@ -570,7 +570,8 @@ def get_common_options(build_ext):
                'horovod/common/net.cc',
                'horovod/common/controller_client.cc',
                'horovod/common/grpcservice.grpc.pb.cc',
-               'horovod/common/grpcservice.pb.cc']
+               'horovod/common/grpcservice.pb.cc',
+               'horovod/common/ops/socket_operations.cc']
     COMPILE_FLAGS = cpp_flags + shlex.split(mpi_flags)
     LINK_FLAGS = link_flags + shlex.split(mpi_flags)
     LIBRARY_DIRS = []
@@ -609,7 +610,12 @@ def get_common_options(build_ext):
 
     if dynamic_schedule:
         MACROS += [('DYNAMIC_SCHEDULE', '1')]
-        LIBRARIES += ['protobuf', 'grpc++', 'grpc']
+        # LIBRARIES += ['libprotobuf.a', 'libgrpc++.a', 'libgrpc.a']
+        grpc_lib_dir = os.environ.get('GRPC_LIB_HOME')
+        if not grpc_lib_dir:
+            raise DistutilsError('GRPC_LIB_HOME is not configured')
+
+        EXTRA_OBJECTS = [grpc_lib_dir + '/lib' + lib + '.a' for lib in ['protobuf', 'grpc++', 'grpc']]
 
     use_timer = os.environ.get('HOROVOD_USE_TIMER')
     if use_timer:
@@ -621,7 +627,8 @@ def get_common_options(build_ext):
                 COMPILE_FLAGS=COMPILE_FLAGS,
                 LINK_FLAGS=LINK_FLAGS,
                 LIBRARY_DIRS=LIBRARY_DIRS,
-                LIBRARIES=LIBRARIES)
+                LIBRARIES=LIBRARIES,
+                EXTRA_OBJECTS=EXTRA_OBJECTS)
 
 
 def build_tf_extension(build_ext, options):
@@ -638,6 +645,7 @@ def build_tf_extension(build_ext, options):
     tensorflow_mpi_lib.extra_link_args = options['LINK_FLAGS'] + tf_link_flags
     tensorflow_mpi_lib.library_dirs = options['LIBRARY_DIRS']
     tensorflow_mpi_lib.libraries = options['LIBRARIES']
+    tensorflow_mpi_lib.extra_objects = options['EXTRA_OBJECTS']
 
     build_ext.build_extension(tensorflow_mpi_lib)
 

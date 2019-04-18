@@ -37,7 +37,7 @@ check_extension('horovod.tensorflow', 'HOROVOD_WITH_TENSORFLOW', __file__, 'mpi_
 from horovod.tensorflow.compression import Compression
 from horovod.tensorflow.mpi_ops import allgather, broadcast, _allreduce
 from horovod.tensorflow.mpi_ops import init, shutdown
-from horovod.tensorflow.mpi_ops import size, local_size, rank, local_rank
+from horovod.tensorflow.mpi_ops import size, local_size, rank, local_rank, get_action, graph_ready, ready_to_stop
 from horovod.tensorflow.mpi_ops import mpi_threads_supported
 from horovod.tensorflow.util import _executing_eagerly
 

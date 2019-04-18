@@ -152,3 +152,12 @@ class HorovodBasics(object):
             raise ValueError(
                 'Horovod has not been initialized; use hvd.init().')
         return bool(mpi_threads_supported)
+
+    def get_action(self):
+        return self.MPI_LIB_CTYPES.horovod_get_action()
+
+    def ready_to_stop(self):
+        self.MPI_LIB_CTYPES.horovod_ready_to_stop()
+
+    def graph_ready(self):
+        self.MPI_LIB_CTYPES.horovod_graph_ready()

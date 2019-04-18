@@ -32,6 +32,27 @@ public:
 
   virtual Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) = 0;
 
+  static int GetSizeof(const std::shared_ptr<Tensor> &tensor) {
+    return GetSizeof(tensor->dtype());
+  }
+
+  static int GetSizeof(DataType dtype) {
+    switch (dtype) {
+      case HOROVOD_INT32:
+        return 4;
+      case HOROVOD_INT64:
+        return 8;
+      case HOROVOD_FLOAT16:
+        return 2;
+      case HOROVOD_FLOAT32:
+        return 4;
+      case HOROVOD_FLOAT64:
+        return 8;
+      default:
+        throw std::logic_error("Type " + DataType_Name(dtype) + " is not supported.");
+    }
+  }
+
 protected:
   int64_t NumElements(std::vector<TensorTableEntry>& entries);
 

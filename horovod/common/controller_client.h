@@ -22,12 +22,23 @@ class ControllerClient {
   grpcservice::ErrorCode SetMasterURI(const std::string &uri);
   int GetNumOfRanks();
 
+  grpcservice::ActionReply GetAction();
+  void GraphReady();
+  void ReadyToStop();
+
   void set_job_name(const std::string &job_name) {
     job_name_ = job_name;
+    request_.set_name(job_name_);
   }
 
   void set_namespace_name(const std::string &ns_name) {
     ns_ = ns_name;
+    request_.set_namespace_(ns_);
+  }
+
+  void set_rank(int rank) {
+    rank_ = rank;
+    request_.set_rank(rank_);
   }
 
   const std::string &job_name() const {
@@ -43,6 +54,9 @@ class ControllerClient {
   std::unique_ptr<grpcservice::AutobotOperator::Stub> stub_;
   std::string job_name_;  // job name
   std::string ns_;  // namespace
+  int rank_ = -1;
+
+  grpcservice::AutobotJobNode request_;
 };
 
 }  // namespace common

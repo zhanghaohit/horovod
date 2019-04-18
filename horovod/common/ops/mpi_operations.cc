@@ -95,6 +95,7 @@ bool MPIAllgather::Enabled(const ParameterManager& param_manager,
 }
 
 Status MPIAllgather::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "MPIAllgather";
   auto& timeline = global_state_->timeline;
 
   // Sizes of subcomponents of each entry from all ranks
@@ -179,6 +180,7 @@ MPIHierarchicalAllgather::MPIHierarchicalAllgather(MPIContext* mpi_context,
     : MPIAllgather(mpi_context, global_state) {}
 
 Status MPIHierarchicalAllgather::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "MPIHierarchicalAllgather";
   auto& timeline = global_state_->timeline;
 
   // Sizes of subcomponents of each entry from all ranks

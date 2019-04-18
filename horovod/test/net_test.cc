@@ -12,6 +12,8 @@ void SendRecv(const string &cstr, const string &sstr) {
   std::thread server([&server_socket, &cstr, &sstr, &csocket] {
     server_socket.Listen();
     csocket = server_socket.Accept();
+
+    server_socket.Close();
     auto recv = csocket->Recv(cstr.size());
     EXPECT_EQ(recv, cstr);
 
