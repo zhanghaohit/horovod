@@ -161,11 +161,16 @@ class SocketCommunicator {
   // recvbuf should have allocated size >= size * num_ranks_
   int Gather(const void *sendbuf, int sendsize, void *recvbuf, int root = 0);
 
-  // recvbuf should have allocated size >= Sum(recvsize)
+  // recvbuf should have allocated size >= Sum(recvsizes)
+  // NOTE: recvsizes/displs are in term of byte size (not number of elements)
   int Gatherv(const void *sendbuf, int sendsize,
-              void *recvbuf, const int *recvsize, const int *displs, int root = 0);
+              void *recvbuf, const int *recvsizes, const int *displs, int root = 0);
 
   int AllGather(const void *sendbuf, int sendsize, void *recvbuf, int root = 0);
+
+  // NOTE: recvsizes/displs are in terms of byte size (not number of elements)
+  int AllGatherv(const void *sendbuf, int sendsize,
+              void *recvbuf, const int *recvsizes, const int *displs, int root = 0);
 
   int Barrier(int root = 0);
 

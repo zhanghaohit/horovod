@@ -1646,7 +1646,12 @@ void horovod_shutdown() {
 
 int horovod_rank() {
   if (!horovod_global.initialization_done) {
+#if DYNAMIC_SCHEDULE
+    auto rstr = GetEnv("AUTOBOT_RANK");
+    horovod_global.rank = rstr.empty() ? 0 : std::stoi(rstr);
+#else
     return -1;
+#endif
   }
   return horovod_global.rank;
 }

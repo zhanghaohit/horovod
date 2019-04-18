@@ -319,7 +319,7 @@ int SocketCommunicator::AllGather(const void *sendbuf, int sendsize, void *recvb
   Timer t("AllGather [" + std::to_string(rank_) + "]");
   int ret = Gather(sendbuf, sendsize, recvbuf, root);
   if (ret != 0) {
-    LOG(ERROR, rank_) << "Gather failed";
+    LOG(ERROR, rank_) << "AllGather-Gather failed";
     return ret;
   }
 
@@ -334,23 +334,56 @@ int SocketCommunicator::AllGather(const void *sendbuf, int sendsize, void *recvb
   }
 }
 
+int SocketCommunicator::AllGatherv(const void *sendbuf, int sendsize,
+                                   void *recvbuf, const int *recvsizes, const int *displs, int root) {
+  CheckRootConsistency(root);
+  assert(sendbuf != nullptr);
+  assert(recvbuf != nullptr);
+
+  Timer t("AllGatherv [" + std::to_string(rank_) + "]");
+  int ret = Gatherv(sendbuf, sendsize, recvbuf, recvsizes, displs, root);
+  if (ret != 0) {
+    LOG(ERROR, rank_) << "AllGatherv-Gatherv failed";
+    return ret;
+  }
+
+  int totalsize = 0, totalsize_verify = recvsizes[num_ranks_ - 1] + displs[num_ranks_ - 1];
+  for (int i = 0; i < num_ranks_; i++) {
+    totalsize += recvsizes[i];
+  }
+  if (totalsize != totalsize_verify)
+    throw std::logic_error("recvsizes not consistent with displs");
+
+  if (root == rank_) {  // master
+    // copy own data to the recvbuf
+    if (sendbuf != nullptr) {
+      char *rb = static_cast<char*>(recvbuf);
+      memcpy(rb + displs[rank_], sendbuf, sendsize);
+    }
+
+    return Bcast(recvbuf, totalsize, root);
+  } else {
+    return Bcast(recvbuf, totalsize, root);
+  }
+}
+
 int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
-                                void *recvbuf, const int *recvsize, const int *displs, int root) {
+                                void *recvbuf, const int *recvsizes, const int *displs, int root) {
   CheckRootConsistency(root);
   Timer t("Gatherv [" + std::to_string(rank_) + "]");
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
-    assert(recvsize != nullptr);
+    assert(recvsizes != nullptr);
     assert(recvbuf != nullptr);
     assert(displs != nullptr);
 
     for (int i = 0; i < num_ranks_; i++) {
       if (i == rank_) continue;
 
-      auto s = clients_.at(i)->Recv(rb + displs[i], recvsize[i]);
-      if (s != recvsize[i]) {
+      auto s = clients_.at(i)->Recv(rb + displs[i], recvsizes[i]);
+      if (s != recvsizes[i]) {
         LOG(ERROR, rank_) << "Gather failed: received " << s
-            << " bytes data, expected " << recvsize[i] << " bytes data";
+            << " bytes data, expected " << recvsizes[i] << " bytes data";
         return -1;
       }
     }

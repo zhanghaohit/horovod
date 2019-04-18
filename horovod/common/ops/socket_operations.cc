@@ -53,10 +53,18 @@ Status SocketAllgather::Execute(std::vector<TensorTableEntry>& entries, const Re
   }
 
   global_state_->timeline.ActivityStartAll(entries, "SOCKET_ALLGATHER");
-  int op = socket_context_->comm.Gatherv(
-      sendbuf != nullptr ? sendbuf : (uint8_t*)buffer_data + displcmnts[global_state_->rank] * element_size,
+  // transform element-wise count to byte-wise counts
+  auto* recvsizes = new int[global_state_->size]();
+  auto* displcmntsizes = new int[global_state_->size]();
+  for (int i = 0; i < global_state_->size; i++) {
+    recvsizes[i] = recvcounts[i] * element_size;
+    displcmntsizes[i] = displcmnts[i] * element_size;
+  }
+
+  int op = socket_context_->comm.AllGatherv(
+      sendbuf != nullptr ? sendbuf : (uint8_t*)buffer_data + displcmntsizes[global_state_->rank],
       (int) total_num_elements * element_size,
-      buffer_data, recvcounts, displcmnts);
+      buffer_data, recvsizes, displcmntsizes);
 
   if (op != 0) {
     throw std::logic_error("Socket::Allgatherv failed.");
@@ -72,6 +80,8 @@ Status SocketAllgather::Execute(std::vector<TensorTableEntry>& entries, const Re
 
   delete[] recvcounts;
   delete[] displcmnts;
+  delete[] recvsizes;
+  delete[] displcmntsizes;
 
   for (size_t ec = 0; ec < entries.size(); ++ec) {
     delete[] entry_component_sizes[ec];
