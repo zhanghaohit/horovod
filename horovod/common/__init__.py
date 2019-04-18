@@ -55,7 +55,7 @@ class HorovodBasics(object):
         full_path = get_extension_full_path(pkg_path, *args)
         self.MPI_LIB_CTYPES = ctypes.CDLL(full_path, mode=ctypes.RTLD_GLOBAL)
 
-    def init(self, comm=None):
+    def init(self, comm=None, dummy=False):
         """A function that initializes Horovod.
 
         Args:
@@ -77,11 +77,11 @@ class HorovodBasics(object):
                 self.MPI_LIB_CTYPES.horovod_init_comm.argtypes = [MPI_Comm]
 
             comm_obj = MPI_Comm.from_address(MPI._addressof(comm))
-            return self.MPI_LIB_CTYPES.horovod_init_comm(comm_obj)
+            return self.MPI_LIB_CTYPES.horovod_init_comm(comm_obj, dummy)
         else:
             comm_size = len(comm)
             return self.MPI_LIB_CTYPES.horovod_init(
-                (ctypes.c_int * comm_size)(*comm), ctypes.c_int(comm_size))
+                (ctypes.c_int * comm_size)(*comm), ctypes.c_int(comm_size), dummy)
 
     def shutdown(self):
         """A function that shuts Horovod down."""
@@ -95,8 +95,17 @@ class HorovodBasics(object):
         """
         size = self.MPI_LIB_CTYPES.horovod_size()
         if size == -1:
-            raise ValueError(
-                'Horovod has not been initialized; use hvd.init().')
+            # NOTE(hzhang): this is for new node adding for dynamic scheduling
+            new_add_node = os.environ.get('NEW_ADD_NODE')
+            if new_add_node and new_add_node == 'true':
+                num_ranks = os.environ.get('AUTOBOT_NUM_RANKS')
+                if num_ranks:
+                    size = int(num_ranks)
+                else:
+                    size = 2
+            else:
+                raise ValueError(
+                    'Horovod has not been initialized; use hvd.init().')
         return size
 
     def local_size(self):

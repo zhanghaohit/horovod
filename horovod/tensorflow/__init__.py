@@ -225,12 +225,13 @@ class DistributedOptimizer(tf.train.Optimizer):
         allreduce the gradients before returning them.
         """
         gradients = self._optimizer.compute_gradients(*args, **kwargs)
-        if size() > 1:
-            grads, vars = zip(*gradients)
-            avg_grads = self._allreduce_grads(grads)
-            return list(zip(avg_grads, vars))
-        else:
-            return gradients
+        # NOTE(hzhang): remove the size == 1 case
+        # if size() > 1:
+        grads, vars = zip(*gradients)
+        avg_grads = self._allreduce_grads(grads)
+        return list(zip(avg_grads, vars))
+        # else:
+        #     return gradients
 
     def apply_gradients(self, *args, **kwargs):
         """Calls this same method on the underlying optimizer."""
@@ -284,11 +285,12 @@ if hasattr(tf, 'GradientTape'):
 
         def gradient(self, target, sources, output_gradients=None):
             gradients = super(self.__class__, self).gradient(target, sources, output_gradients)
-            if size() > 1:
-                avg_grads = self._allreduce_grads(gradients)
-                return avg_grads
-            else:
-                return gradients
+            # NOTE(hzhang): remove the size == 1 case
+            # if size() > 1:
+            avg_grads = self._allreduce_grads(gradients)
+            return avg_grads
+            # else:
+            #     return gradients
 
 
 def DistributedGradientTape(gradtape, device_dense='', device_sparse='',

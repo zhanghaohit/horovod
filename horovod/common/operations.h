@@ -49,10 +49,10 @@ Status CheckInitialized();
 extern "C" {
 
 // C interface to initialize Horovod.
-void horovod_init(const int *ranks, int nranks);
+void horovod_init(const int *ranks, int nranks, bool dummy);
 
 // C interface to initialize Horovod with the given MPI communicator.
-void horovod_init_comm(MPI_Comm comm);
+void horovod_init_comm(MPI_Comm comm, bool dummy);
 
 // C interface to shut down Horovod.
 void horovod_shutdown();

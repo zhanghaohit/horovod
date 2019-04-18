@@ -124,6 +124,8 @@ struct HorovodGlobalState {
   // name) and time point when tensor started allreduce op.
   std::unique_ptr<MessageTable> message_table;
 
+  bool dummy = false;
+
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
     // call. If a thread is still joinable (not detached or complete) its

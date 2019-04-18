@@ -694,6 +694,26 @@ void set_int_from_env(const char* env, int& val) {
   }
 }
 
+#if DYNAMIC_SCHEDULE
+void init_ctl_client() {
+  if (!ctl_client_) {
+    auto rstr = GetEnv("AUTOBOT_RANK");
+    int rank = rstr.empty() ? 0 : std::stoi(rstr);
+    string ctl_uri = GetEnv("AUTOBOT_CONTROLLER_URI");;
+    string job_name = GetEnv("AUTOBOT_JOB_NAME");
+    string ns_name = GetEnv("AUTOBOT_JOB_NAMESPACE");
+    if (ctl_uri.empty() || job_name.empty() || ns_name.empty()) {
+      LOG(ERROR, rank) << "Autobot central controller uri is not defined. Will fall back to use env settings";
+    } else {
+      ctl_client_.reset(new ControllerClient(ctl_uri));
+      ctl_client_->set_job_name(job_name);
+      ctl_client_->set_namespace_name(ns_name);
+      ctl_client_->set_rank(rank);
+    }
+  }
+}
+#endif
+
 // The MPI background thread loop coordinates all the MPI processes and the
 // tensor reductions. The design of the communicator mechanism is limited by a
 // few considerations:
@@ -773,49 +793,42 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   MPI_Comm_rank(ctx.mpi_comm, &rank);
   bool is_coordinator = rank == 0;
 #else
-  auto rstr = GetEnv("AUTOBOT_RANK");
-  int rank = rstr.empty() ? 0 : std::stoi(rstr);
-  bool is_coordinator = rank == 0;
-
-  if (!ctl_client_) {
-    string ctl_uri = GetEnv("AUTOBOT_CONTROLLER_URI");;
-    string job_name = GetEnv("AUTOBOT_JOB_NAME");
-    string ns_name = GetEnv("AUTOBOT_JOB_NAMESPACE");
-    if (ctl_uri.empty() || job_name.empty() || ns_name.empty()) {
-      LOG(ERROR, rank) << "Autobot central controller uri is not defined. Will fall back to use env settings";
-    } else {
-      ctl_client_.reset(new ControllerClient(ctl_uri));
-      ctl_client_->set_job_name(job_name);
-      ctl_client_->set_namespace_name(ns_name);
-      ctl_client_->set_rank(rank);
-    }
-  }
-
-  LOG(WARNING, rank) << "Using Socket for communication";
-  int num_ranks = 0;
+  int rank = 0, num_ranks = 1;
+  bool is_coordinator = true;
   string master_uri;
-  if (is_coordinator) {
-    // get its local ip
-    master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
-  }
-
-  if (ctl_client_) {
-    num_ranks = ctl_client_->GetNumOfRanks();
-    if (is_coordinator) {
-      ctl_client_->SetMasterURI(master_uri);
-    } else {
-      master_uri = ctl_client_->GetMasterURI();
-    }
-    LOG(INFO) << "From central controller: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
+  if (state.dummy) {
+    LOG(WARNING) << "Pseudo init horovod";
   } else {
-    auto nrstr = GetEnv("AUTOBOT_NUM_RANKS");
-    num_ranks = nrstr.empty() ? 1 : std::stoi(nrstr);
-    if (!is_coordinator) {
-      master_uri = GetEnv("AUTOBOT_MASTER_URI");
-      if (master_uri.empty())
-        throw std::invalid_argument("Cannot get master uri for either central controller or env");
+    auto rstr = GetEnv("AUTOBOT_RANK");
+    rank  = rstr.empty() ? 0 : std::stoi(rstr);
+    is_coordinator = rank == 0;
+
+    init_ctl_client();
+
+    if (is_coordinator) {
+      // get its local ip
+      master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
+    }
+
+    if (ctl_client_) {
+      num_ranks = ctl_client_->GetNumOfRanks();
+      if (is_coordinator) {
+        ctl_client_->SetMasterURI(master_uri);
+      } else {
+        master_uri = ctl_client_->GetMasterURI();
+      }
+      LOG(INFO) << "From central controller: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
+    } else {
+      auto nrstr = GetEnv("AUTOBOT_NUM_RANKS");
+      num_ranks = nrstr.empty() ? 1 : std::stoi(nrstr);
+      if (!is_coordinator) {
+        master_uri = GetEnv("AUTOBOT_MASTER_URI");
+        if (master_uri.empty())
+          throw std::invalid_argument("Cannot get master uri for either central controller or env");
+      }
     }
   }
+  LOG(WARNING, rank) << "Using Socket for communication";
   net_context.comm.Init(rank, num_ranks, master_uri);
 #endif
 
@@ -1534,8 +1547,9 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 
 // Start Horovod background thread. Ensure that this is
 // only done once no matter how many times this function is called.
-void InitializeHorovodOnce(const int* ranks, int nranks) {
+void InitializeHorovodOnce(const int* ranks, int nranks, bool dummy) {
   // Ensure background thread is only started once.
+  horovod_global.dummy = dummy;
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {
       horovod_global.ranks.push_back(ranks[i]);
@@ -1567,7 +1581,13 @@ extern "C" {
 
 #if DYNAMIC_SCHEDULE
 using namespace grpcservice;
+
 int horovod_get_action() {
+  if (!horovod_global.initialization_done) {
+    LOG(ERROR) << "Horovod is not inited";
+    return -1;
+  }
+
   ActionReply reply;
   if (horovod_global.rank == 0) {
     reply = ctl_client_->GetAction();
@@ -1613,22 +1633,24 @@ int horovod_get_action() {
 }
 
 void horovod_graph_ready() {
+  init_ctl_client();  // allow this func to be called before init
   ctl_client_->GraphReady();
 }
 
 void horovod_ready_to_stop() {
+  init_ctl_client();  // allow this func to be called before init
   ctl_client_->ReadyToStop();
 }
 
 #endif
 
-void horovod_init(const int* ranks, int nranks) {
-  InitializeHorovodOnce(ranks, nranks);
+void horovod_init(const int* ranks, int nranks, bool dummy) {
+  InitializeHorovodOnce(ranks, nranks, dummy);
 }
 
-void horovod_init_comm(MPI_Comm comm) {
+void horovod_init_comm(MPI_Comm comm, bool dummy) {
   MPI_Comm_dup(comm, &(mpi_context.mpi_comm));
-  InitializeHorovodOnce(NULL, 0);
+  InitializeHorovodOnce(NULL, 0, dummy);
 }
 
 void horovod_shutdown() {
