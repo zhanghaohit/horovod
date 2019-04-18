@@ -54,6 +54,7 @@ class HorovodBasics(object):
     def __init__(self, pkg_path, *args):
         full_path = get_extension_full_path(pkg_path, *args)
         self.MPI_LIB_CTYPES = ctypes.CDLL(full_path, mode=ctypes.RTLD_GLOBAL)
+        self.registered = False
 
     def init(self, comm=None, dummy=False):
         """A function that initializes Horovod.
@@ -66,7 +67,9 @@ class HorovodBasics(object):
         if comm is None:
             comm = []
 
-        atexit.register(self.shutdown)
+        if not self.registered:
+            atexit.register(self.shutdown)
+            self.registered = True
 
         if not isinstance(comm, list):
             from mpi4py import MPI
