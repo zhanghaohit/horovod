@@ -19,12 +19,12 @@ class ControllerClient {
   }
 
   std::string GetMasterURI();
-  grpcservice::ErrorCode SetMasterURI(const std::string &uri);
+  int SetMasterURI(const std::string &uri);
   int GetNumOfRanks();
 
   grpcservice::ActionReply GetAction();
-  void GraphReady();
-  void ReadyToStop();
+  int GraphReady();
+  int ReadyToStop();
 
   void set_job_name(const std::string &job_name) {
     job_name_ = job_name;

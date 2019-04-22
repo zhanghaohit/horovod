@@ -169,7 +169,7 @@ class HorovodBasics(object):
         return self.MPI_LIB_CTYPES.horovod_get_action()
 
     def ready_to_stop(self):
-        self.MPI_LIB_CTYPES.horovod_ready_to_stop()
+        return self.MPI_LIB_CTYPES.horovod_ready_to_stop()
 
     def graph_ready(self):
-        self.MPI_LIB_CTYPES.horovod_graph_ready()
+        return self.MPI_LIB_CTYPES.horovod_graph_ready()

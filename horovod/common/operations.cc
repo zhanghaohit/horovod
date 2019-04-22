@@ -1637,14 +1637,14 @@ int horovod_get_action() {
   }
 }
 
-void horovod_graph_ready() {
+int horovod_graph_ready() {
   init_ctl_client();  // allow this func to be called before init
-  ctl_client_->GraphReady();
+  return ctl_client_->GraphReady();
 }
 
-void horovod_ready_to_stop() {
+int horovod_ready_to_stop() {
   init_ctl_client();  // allow this func to be called before init
-  ctl_client_->ReadyToStop();
+  return ctl_client_->ReadyToStop();
 }
 
 #endif

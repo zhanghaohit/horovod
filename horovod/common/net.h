@@ -11,6 +11,7 @@
 #include <memory>
 #include <unordered_map>
 #include <chrono>
+#include <mutex>
 #include "logging.h"
 
 namespace horovod {
@@ -122,6 +123,10 @@ class ClientSocket: public Socket {
    * return: size of data received
    */
   int Recv(stringstream& ss, int size = DEFAULT_RECV_SIZE);
+
+ private:
+  std::mutex lock_;
+
 };
 
 class ServerSocket: public Socket {

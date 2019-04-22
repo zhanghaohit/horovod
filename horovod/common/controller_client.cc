@@ -25,13 +25,13 @@ std::string ControllerClient::GetMasterURI() {
       return "";
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   }
   LOG(ERROR) << "GetMasterURI failed after " << retries;
   return "";
 }
 
-ErrorCode ControllerClient::SetMasterURI(const std::string &uri) {
+int ControllerClient::SetMasterURI(const std::string &uri) {
   request_.set_uri(uri);
 
   ErrorCodeReply reply;
@@ -43,7 +43,7 @@ ErrorCode ControllerClient::SetMasterURI(const std::string &uri) {
   } else {
     LOG(ERROR) << "SetMasterURI failed: " << status.error_message() << " (" << status.error_code()
         << ")";
-    return OTHER;
+    return -1;
   }
 }
 
@@ -74,7 +74,7 @@ ActionReply ControllerClient::GetAction() {
   return reply;
 }
 
-void ControllerClient::GraphReady() {
+int ControllerClient::GraphReady() {
   ErrorCodeReply reply;
   ClientContext context;
   Status status = stub_->GraphReady(&context, request_, &reply);
@@ -83,13 +83,15 @@ void ControllerClient::GraphReady() {
     if (reply.errorcode() != SUCCESS) {
       LOG(ERROR) << "GraphReady failed: " << reply.errorcode();
     }
+    return reply.errorcode();
   } else {
     LOG(ERROR) << "GraphReady failed: " << status.error_message() << " (" << status.error_code()
         << ")";
+    return -1;
   }
 }
 
-void ControllerClient::ReadyToStop() {
+int ControllerClient::ReadyToStop() {
   ErrorCodeReply reply;
   ClientContext context;
   Status status = stub_->ReadyToStop(&context, request_, &reply);
@@ -98,9 +100,11 @@ void ControllerClient::ReadyToStop() {
     if (reply.errorcode() != SUCCESS) {
       LOG(ERROR) << "ReadyToStop failed: " << reply.errorcode();
     }
+    return reply.errorcode();
   } else {
     LOG(ERROR) << "ReadyToStop failed: " << status.error_message() << " (" << status.error_code()
         << ")";
+    return -1;
   }
 }
 
