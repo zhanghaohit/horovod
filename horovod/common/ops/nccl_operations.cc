@@ -181,6 +181,7 @@ NCCLBroadcast::NCCLBroadcast(NCCLContext* nccl_context, SocketContext* net_conte
 }
 
 Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "Using ncclBcast";
   assert(entries.size() == 1);
   auto e = entries[0];
 
@@ -192,35 +193,23 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Resp
     data_ptr = (void*) e.output->data();
   }
 
-  if (entries[0].device != CPU_DEVICE_ID) {
-    LOG(DEBUG) << "Using ncclBcast";
-    if (!e.ranks.empty()) {
-      LOG(ERROR) << "Partial broadcast is not supported for GPU data";
-    }
-    InitCUDA(entries);
-    InitNCCLComm(entries, response.devices());
-    InitCUDAQueue(entries, response);
-
-    global_state_->timeline.ActivityStartAll(entries, NCCL_BCAST);
-    auto nccl_result = ncclBcast(data_ptr,
-                       (int) e.tensor->shape().num_elements(),
-                       GetNCCLDataType(e.tensor),
-                       e.root_rank, *nccl_comm_, *stream_);
-    nccl_context_->ErrorCheck("ncclBcast", nccl_result);
-    global_state_->timeline.ActivityEndAll(entries);
-
-    return FinalizeCUDAQueue(entries);
-  } else {  // use net_comm to broadcast
-    LOG(DEBUG) << "Using socket Bcast";
-    // global_state_->timeline.ActivityStartAll(entries, NCCL_BCAST);
-    auto ret = net_context_->comm.Bcast(
-        data_ptr, e.tensor->shape().num_elements() * GetSizeof(e.tensor), e.root_rank, e.ranks);
-    if (ret != 0) {
-      throw std::logic_error("Socket_Broadcast failed.");
-    }
-    // global_state_->timeline.ActivityEndAll(entries);
-    return Status::OK();
+  if (!e.ranks.empty()) {
+    LOG(ERROR) << "Partial broadcast is not supported for GPU data";
   }
+  InitCUDA(entries);
+  InitNCCLComm(entries, response.devices());
+  InitCUDAQueue(entries, response);
+
+  auto nccl_result = ncclBcast(data_ptr,
+                     (int) e.tensor->shape().num_elements(),
+                     GetNCCLDataType(e.tensor),
+                     e.root_rank, *nccl_comm_, *stream_);
+  nccl_context_->ErrorCheck("ncclBcast", nccl_result);
+  if (global_state_->timeline.Initialized()) {
+    cuda_context_->RecordEvent(event_queue_, NCCL_BCAST, *stream_);
+  }
+
+  return FinalizeCUDAQueue(entries);
 }
 
 NCCLHierarchicalAllreduce::NCCLHierarchicalAllreduce(NCCLContext* nccl_context, MPIContext* mpi_context,

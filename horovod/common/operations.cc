@@ -164,21 +164,26 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
     allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new DDLAllreduce(&ddl_context, &cuda_context, &state)));
   #endif
 
+#if !DYNAMIC_SCHEDULE
   allgather_ops.push_back(std::shared_ptr<AllgatherOp>(new MPIHierarchicalAllgather(&mpi_context, &state)));
 #endif
 #endif
+#endif
 
+#if !DYNAMIC_SCHEDULE
   // Default operations, always enabled but last to be checked.
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPIAllreduce(&mpi_context, &state)));
   allgather_ops.push_back(std::shared_ptr<AllgatherOp>(new MPIAllgather(&mpi_context, &state)));
+#endif
 
 #if DYNAMIC_SCHEDULE
-  // FIXME(hzhang): add ifdef to choose
   LOG(INFO, state.rank) << "Enable Dynamic Broadcast";
   broadcast_ops.push_back(std::shared_ptr<BroadcastOp>(
           new NCCLBroadcast(&nccl_context, &net_context, &cuda_context, &state)));
-#endif
+  broadcast_ops.push_back(std::shared_ptr<BroadcastOp>(new SocketBroadcast(&net_context, &state)));
+#else
   broadcast_ops.push_back(std::shared_ptr<BroadcastOp>(new MPIBroadcast(&mpi_context, &state)));
+#endif
   std::shared_ptr<ErrorOp> error_op(new ErrorOp(&state));
 
   return new OperationManager(&state.param_manager, allreduce_ops, allgather_ops, broadcast_ops, error_op);

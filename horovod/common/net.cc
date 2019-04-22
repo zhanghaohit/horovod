@@ -127,6 +127,8 @@ int ClientSocket::Connect(bool blocking) {
     LOG(FATAL) << gai_strerror(rv) << ", " << strerror(errno) << "(errno = " << errno << ")";
     return ST_ERROR;
   }
+
+  int retries = 0;
   do {
     for (p = servinfo; p != NULL; p = p->ai_next) {
       /* Try to create the socket and to connect it.
@@ -157,6 +159,11 @@ int ClientSocket::Connect(bool blocking) {
       return ST_SUCCESS;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    retries++;
+
+    if (retries % 10 == 0) {
+      LOG(WARNING) << "Failed to connect " << ip_ << ":" << port_ << " " << retries << " times";
+    }
   } while (blocking);
 
   if (p == nullptr)
@@ -337,11 +344,12 @@ int SocketCommunicator::AllGather(const void *sendbuf, int sendsize, void *recvb
 int SocketCommunicator::AllGatherv(const void *sendbuf, int sendsize,
                                    void *recvbuf, const int *recvsizes, const int *displs, int root) {
   CheckRootConsistency(root);
-  assert(sendbuf != nullptr);
   assert(recvbuf != nullptr);
+  char *rb = static_cast<char*>(recvbuf);
 
   Timer t("AllGatherv [" + std::to_string(rank_) + "]");
-  int ret = Gatherv(sendbuf, sendsize, recvbuf, recvsizes, displs, root);
+  int ret = Gatherv(sendbuf == nullptr ? rb + displs[rank_] : sendbuf,
+                    sendsize, recvbuf, recvsizes, displs, root);
   if (ret != 0) {
     LOG(ERROR, rank_) << "AllGatherv-Gatherv failed";
     return ret;
@@ -357,7 +365,6 @@ int SocketCommunicator::AllGatherv(const void *sendbuf, int sendsize,
   if (root == rank_) {  // master
     // copy own data to the recvbuf
     if (sendbuf != nullptr) {
-      char *rb = static_cast<char*>(recvbuf);
       memcpy(rb + displs[rank_], sendbuf, sendsize);
     }
 

@@ -70,13 +70,9 @@ public:
   bool Enabled(const ParameterManager& param_manager,
                const std::vector<TensorTableEntry>& entries,
                const Response& response) const override {
-    // FIXME(hzhang): separate NCCLBroadcast and SocketBroadcast
-    // auto ret = entries[0].device != CPU_DEVICE_ID;
-    // LOG(INFO) << "[NCCLBroadcast] data in GPU: " << ret;
-    return true;
+    return entries[0].device != CPU_DEVICE_ID;
   }
 };
-
 
 class NCCLHierarchicalAllreduce : public NCCLAllreduce {
 public:

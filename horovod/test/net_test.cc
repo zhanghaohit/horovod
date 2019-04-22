@@ -350,7 +350,8 @@ TEST(NetTest, AllGathervTest) {
         EXPECT_EQ(string(buf, size * num_ranks), gstr);
 
         memset(buf, 0, total_size);
-        ret = comm.AllGatherv(strs[rank].data(), strs[rank].size(), buf, recvcounts, displcmnts);
+        memcpy(buf + rank * size, strs[rank].data(), strs[rank].size());
+        ret = comm.AllGatherv(nullptr, strs[rank].size(), buf, recvcounts, displcmnts);
         EXPECT_EQ(ret, 0);
         EXPECT_EQ(string(buf, size * num_ranks), gstr);
         delete[] buf;

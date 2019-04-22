@@ -22,7 +22,23 @@ public:
   }
 
 protected:
-  SocketContext* socket_context_;
+  SocketContext* socket_context_ = nullptr;
+};
+
+class SocketBroadcast : public BroadcastOp {
+public:
+  SocketBroadcast(SocketContext* socket_context, HorovodGlobalState* global_state);
+
+  Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
+
+  bool Enabled(const ParameterManager& param_manager,
+               const std::vector<TensorTableEntry>& entries,
+               const Response& response) const override {
+    return entries[0].device == CPU_DEVICE_ID;
+  }
+
+protected:
+  SocketContext* socket_context_ = nullptr;
 };
 
 } // namespace common

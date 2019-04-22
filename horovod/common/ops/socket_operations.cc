@@ -93,5 +93,32 @@ Status SocketAllgather::Execute(std::vector<TensorTableEntry>& entries, const Re
   return Status::OK();
 }
 
+SocketBroadcast::SocketBroadcast(SocketContext* socket_context, HorovodGlobalState* global_state) :
+    socket_context_(socket_context), BroadcastOp(global_state) {}
+
+Status SocketBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "Using socket Bcast";
+
+  assert(entries.size() == 1);
+  auto e = entries[0];
+
+  // On root rank, NCCL_Bcast sends data, on other ranks it receives data.
+  void* data_ptr;
+  if (global_state_->rank == e.root_rank) {
+    data_ptr = (void*) e.tensor->data();
+  } else {
+    data_ptr = (void*) e.output->data();
+  }
+
+  global_state_->timeline.ActivityStartAll(entries, "Socket_Bcast");
+  auto ret = socket_context_->comm.Bcast(
+      data_ptr, e.tensor->shape().num_elements() * GetSizeof(e.tensor), e.root_rank, e.ranks);
+  if (ret != 0) {
+    throw std::logic_error("Socket_Broadcast failed.");
+  }
+  global_state_->timeline.ActivityEndAll(entries);
+  return Status::OK();
+}
+
 } // namespace common
 } // namespace horovod

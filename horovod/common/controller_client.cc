@@ -1,4 +1,6 @@
 #include "controller_client.h"
+
+#include <thread>
 #include "logging.h"
 
 using namespace grpcservice;
@@ -8,17 +10,25 @@ namespace horovod {
 namespace common {
 
 std::string ControllerClient::GetMasterURI() {
-  URIReply reply;
-  ClientContext context;
-  Status status = stub_->GetMasterURI(&context, request_, &reply);
+  int retries = 20;
+  for (int i = 0; i < retries; i++) {
+    URIReply reply;
+    ClientContext context;
+    Status status = stub_->GetMasterURI(&context, request_, &reply);
 
-  if (status.ok()) {
-    return reply.uri();
-  } else {
-    LOG(ERROR) << "GetMasterURI failed: " << status.error_message() << " (" << status.error_code()
-        << ")";
-    return "";
+    if (status.ok()) {
+      auto uri = reply.uri();
+      if (!uri.empty()) return uri;
+    } else {
+      LOG(ERROR) << "GetMasterURI failed: " << status.error_message() << " (" << status.error_code()
+          << ")";
+      return "";
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+  LOG(ERROR) << "GetMasterURI failed after " << retries;
+  return "";
 }
 
 ErrorCode ControllerClient::SetMasterURI(const std::string &uri) {
