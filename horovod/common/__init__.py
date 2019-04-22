@@ -166,10 +166,39 @@ class HorovodBasics(object):
         return bool(mpi_threads_supported)
 
     def get_action(self):
+        """GetAction to central controller
+        Returns:
+          action: int
+            DO_NOTHING = 0;
+            NEW_NODE_READY = 1;
+            NUM_NODE_REDUCED = 2;
+            SHOULD_STOP = 3;
+          if GRPC error from central controller, return -1
+        """
         return self.MPI_LIB_CTYPES.horovod_get_action()
 
     def ready_to_stop(self):
+        """Send ReadyToStop to central controller
+        Returns:
+          error code from central controller: int
+            SUCCESS = 0;
+            FAILED_LOCK = 1;
+            DB_ERR = 2;
+            NOT_FOUND = 3;
+            OTHER = 4;
+          if GRPC error, return -1
+        """
         return self.MPI_LIB_CTYPES.horovod_ready_to_stop()
 
     def graph_ready(self):
+        """Send GraphReady to central controller
+        Returns:
+          error code from central controller: int
+            SUCCESS = 0;
+            FAILED_LOCK = 1;
+            DB_ERR = 2;
+            NOT_FOUND = 3;
+            OTHER = 4;
+          if GRPC error, return -1
+        """
         return self.MPI_LIB_CTYPES.horovod_graph_ready()

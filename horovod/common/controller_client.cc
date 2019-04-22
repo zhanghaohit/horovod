@@ -66,10 +66,8 @@ ActionReply ControllerClient::GetAction() {
   ClientContext context;
   Status status = stub_->GetAction(&context, request_, &reply);
 
-  if (status.ok()) {
-  } else {
-    LOG(ERROR) << "GetAction failed: " << status.error_message() << " (" << status.error_code()
-        << ")";
+  if (!status.ok()) {
+    LOG(ERROR) << "GetAction failed: " << status.error_message() << " (" << status.error_code() << ")";
   }
   return reply;
 }

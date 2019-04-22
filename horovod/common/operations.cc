@@ -1596,6 +1596,9 @@ int horovod_get_action() {
   ActionReply reply;
   if (horovod_global.rank == 0) {
     reply = ctl_client_->GetAction();
+    if (!reply.status.ok()) {
+      return -1;
+    }
 
     string buf;
     reply.SerializeToString(&buf);
@@ -1624,6 +1627,10 @@ int horovod_get_action() {
 
     reply.ParseFromString(string(buf, size));
     delete[] buf;
+
+    if (!reply.status.ok()) {
+      return -1;
+    }
 
     auto action = reply.action();
     if (action == NUM_NODE_REDUCED) {
