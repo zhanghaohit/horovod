@@ -646,6 +646,7 @@ def build_tf_extension(build_ext, options):
     tensorflow_mpi_lib.library_dirs = options['LIBRARY_DIRS']
     tensorflow_mpi_lib.libraries = options['LIBRARIES']
     tensorflow_mpi_lib.extra_objects = options['EXTRA_OBJECTS']
+    tensorflow_mpi_lib.undef_macros = ['NDEBUG']
 
     build_ext.build_extension(tensorflow_mpi_lib)
 

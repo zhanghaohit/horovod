@@ -20,6 +20,9 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
 
 #include "message.h"
 
@@ -160,6 +163,35 @@ public:
 // allreduce and allgather ops are asynchronous, this callback is what resumes
 // computation after the reduction is completed.
 using StatusCallback = std::function<void(const Status&)>;
+
+template <class T>
+class Syncer {
+ public:
+  T Wait() {
+    std::unique_lock<std::mutex> lk(lock_);
+    cv_.wait(lk, [this] { return ready_;});
+    return value_;
+  }
+
+  void Notify(const T &value) {
+    {
+      std::lock_guard<std::mutex> lk(lock_);
+      value_ = value;
+      ready_ = true;
+    }
+    cv_.notify_one();
+  }
+
+  T value() const {
+    return value_;
+  }
+
+ private:
+  std::mutex lock_;
+  std::condition_variable cv_;
+  T value_;
+  bool ready_ = false;  // avoid spurious wakeup
+};
 
 // Table storing Tensors to be reduced, keyed by unique name.
 // This table contains everything necessary to do the reduction.

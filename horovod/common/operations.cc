@@ -100,7 +100,6 @@ MPIContext mpi_context;
 #if DYNAMIC_SCHEDULE
 constexpr int kDefaultPort = 12345;
 SocketContext net_context;  // used for horovod background thread
-SocketContext user_net_context;  // used for user-initiated net comm
 std::unique_ptr<ControllerClient> ctl_client_;
 #endif
 
@@ -436,6 +435,8 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
     response.set_response_type(Response::ALLREDUCE);
   } else if (message_type == Request::BROADCAST) {
     response.set_response_type(Response::BROADCAST);
+  } else if (message_type == Request::GETACTION) {
+    response.set_response_type(Response::GETACTION);
   }
   response.set_devices(devices);
 
@@ -515,6 +516,7 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
       assert(response.response_type() == Response::ALLREDUCE ||
              response.response_type() == Response::ALLGATHER ||
              response.response_type() == Response::BROADCAST ||
+             response.response_type() == Response::GETACTION ||
              response.response_type() == Response::ERROR);
 
       entries.push_back(iter->second);
@@ -578,7 +580,15 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
 
   Status status;
   try {
-    status = op_manager->ExecuteOperation(entries, response);
+#if DYNAMIC_SCHEDULE
+    if (response.response_type() == Response::GETACTION) {
+      status = Status::OK();
+    } else {
+#endif
+      status = op_manager->ExecuteOperation(entries, response);
+#if DYNAMIC_SCHEDULE
+    }
+#endif
   } catch (const std::exception& ex) {
     status = Status::UnknownError(ex.what());
   }
@@ -589,7 +599,6 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
       e.callback(status);
     }
   }
-
 }
 
 // Report Tensors that were submitted to be reduced, gathered or broadcasted by
@@ -837,14 +846,6 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   }
   LOG(WARNING, rank) << "Using Socket for communication";
   net_context.comm.Init(rank, num_ranks, master_uri);
-
-  std::vector<string> tokens;
-  boost::split(tokens, master_uri, boost::is_any_of(":"));
-  if (tokens.size() < 2) {
-    throw std::invalid_argument("master uri format error: " + master_uri);
-  }
-  // FIXME(hzhang): find a better way to do this kind of comm
-  user_net_context.comm.Init(rank, num_ranks, tokens[0] + ":" + std::to_string(std::stoi(tokens[1]) + 1));
 #endif
 
   // Get MPI size to determine how many tensors to wait for before reducing.
@@ -1116,7 +1117,6 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 #if DYNAMIC_SCHEDULE
     LOG(INFO, horovod_global.rank) << "Destroy socket communicator";
     net_context.comm.Destroy();
-    user_net_context.comm.Destroy();
 #endif
 
   if (horovod_global.should_finalize) {
@@ -1598,21 +1598,39 @@ extern "C" {
 #if DYNAMIC_SCHEDULE
 using namespace grpcservice;
 
-int horovod_get_action() {
-//  Request message;
-//  message.set_request_type(Request::GETACTION);
-//
-//  Syncer<int> syncer;
-//  message.set_syncer(&syncer);
-//
-//  {
-//    std::lock_guard<std::mutex> guard(horovod_global.mutex);
-//    horovod_global.message_queue.push(message);
-//    LOG(TRACE, horovod_global.rank) << "Enqueued GETACTION";
-//  }
-//  return syncer.Wait();
+unsigned seed = 1;
 
-  return get_action();
+int horovod_get_action() {
+  Request message;
+  message.set_request_type(Request::GETACTION);
+  message.set_request_rank(horovod_global.rank);
+
+  string name = "get_action_" + std::to_string(rand_r(&seed));
+  message.set_tensor_name(name);
+
+  Syncer<int> syncer;
+
+  TensorTableEntry e;
+  e.tensor_name = name;
+  e.callback = [&syncer, &name](const common::Status& status) {
+    LOG(DEBUG, horovod_global.rank) << "Perform action GETACTION " << name;
+    int action = get_action();
+    syncer.Notify(action);
+  };
+
+  {
+    std::lock_guard<std::mutex> guard(horovod_global.mutex);
+
+    if (horovod_global.tensor_table.find(name) != horovod_global.tensor_table.end()) {
+      LOG(ERROR) << "Duplicate tensor name " << name;
+      return -1;
+    }
+    horovod_global.tensor_table.emplace(name, std::move(e));
+
+    horovod_global.message_queue.push(message);
+    LOG(DEBUG, horovod_global.rank) << "Enqueued GETACTION " << name;
+  }
+  return syncer.Wait();
 }
 
 int get_action() {
@@ -1628,11 +1646,11 @@ int get_action() {
     string buf;
     reply.SerializeToString(&buf);
     int size = buf.size();
-    int ret = user_net_context.comm.Bcast(&size, sizeof(size));
+    int ret = net_context.comm.Bcast(&size, sizeof(size));
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply size failed");
     }
-    ret = user_net_context.comm.Bcast(const_cast<char*>(buf.data()), buf.size());
+    ret = net_context.comm.Bcast(const_cast<char*>(buf.data()), buf.size());
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply failed");
     }
@@ -1640,12 +1658,12 @@ int get_action() {
     return reply.action();
   } else {
     int size = -1;
-    auto ret = user_net_context.comm.Bcast(&size, sizeof(size));
+    auto ret = net_context.comm.Bcast(&size, sizeof(size));
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply size failed");
     }
     auto buf = new char[size];
-    ret = user_net_context.comm.Bcast(buf, size);
+    ret = net_context.comm.Bcast(buf, size);
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply failed");
     }
