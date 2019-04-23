@@ -67,7 +67,10 @@ ActionReply ControllerClient::GetAction() {
   Status status = stub_->GetAction(&context, request_, &reply);
 
   if (!status.ok()) {
-    LOG(ERROR) << "GetAction failed: " << status.error_message() << " (" << status.error_code() << ")";
+    string msg = "GetAction failed: " + status.error_message()
+        + " (" + std::to_string(status.error_code()) + ")";
+    LOG(ERROR) << msg;
+    throw std::invalid_argument(msg);
   }
   return reply;
 }

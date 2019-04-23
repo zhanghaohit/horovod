@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <set>
 #include <unordered_set>
+#include <boost/algorithm/string.hpp>
 
 #define OMPI_SKIP_MPICXX
 #include "fusion_buffer_manager.h"
@@ -98,7 +99,8 @@ MPIContext mpi_context;
 
 #if DYNAMIC_SCHEDULE
 constexpr int kDefaultPort = 12345;
-SocketContext net_context;
+SocketContext net_context;  // used for horovod background thread
+SocketContext user_net_context;  // used for user-initiated net comm
 std::unique_ptr<ControllerClient> ctl_client_;
 #endif
 
@@ -801,6 +803,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   int rank = 0, num_ranks = 1;
   bool is_coordinator = true;
   string master_uri;
+  if (is_coordinator) {
+    // get its local ip
+    master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
+  }
+
   if (state.dummy) {
     LOG(WARNING) << "Pseudo init horovod";
   } else {
@@ -809,11 +816,6 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     is_coordinator = rank == 0;
 
     init_ctl_client();
-
-    if (is_coordinator) {
-      // get its local ip
-      master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
-    }
 
     if (ctl_client_) {
       num_ranks = ctl_client_->GetNumOfRanks();
@@ -835,6 +837,14 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   }
   LOG(WARNING, rank) << "Using Socket for communication";
   net_context.comm.Init(rank, num_ranks, master_uri);
+
+  std::vector<string> tokens;
+  boost::split(tokens, master_uri, boost::is_any_of(":"));
+  if (tokens.size() < 2) {
+    throw std::invalid_argument("master uri format error: " + master_uri);
+  }
+  // FIXME(hzhang): find a better way to do this kind of comm
+  user_net_context.comm.Init(rank, num_ranks, tokens[0] + ":" + std::to_string(std::stoi(tokens[1]) + 1));
 #endif
 
   // Get MPI size to determine how many tensors to wait for before reducing.
@@ -1106,6 +1116,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 #if DYNAMIC_SCHEDULE
     LOG(INFO, horovod_global.rank) << "Destroy socket communicator";
     net_context.comm.Destroy();
+    user_net_context.comm.Destroy();
 #endif
 
   if (horovod_global.should_finalize) {
@@ -1588,6 +1599,23 @@ extern "C" {
 using namespace grpcservice;
 
 int horovod_get_action() {
+//  Request message;
+//  message.set_request_type(Request::GETACTION);
+//
+//  Syncer<int> syncer;
+//  message.set_syncer(&syncer);
+//
+//  {
+//    std::lock_guard<std::mutex> guard(horovod_global.mutex);
+//    horovod_global.message_queue.push(message);
+//    LOG(TRACE, horovod_global.rank) << "Enqueued GETACTION";
+//  }
+//  return syncer.Wait();
+
+  return get_action();
+}
+
+int get_action() {
   if (!horovod_global.initialization_done) {
     LOG(ERROR) << "Horovod is not inited";
     return -1;
@@ -1596,18 +1624,15 @@ int horovod_get_action() {
   ActionReply reply;
   if (horovod_global.rank == 0) {
     reply = ctl_client_->GetAction();
-    if (!reply.status.ok()) {
-      return -1;
-    }
 
     string buf;
     reply.SerializeToString(&buf);
     int size = buf.size();
-    int ret = net_context.comm.Bcast(&size, sizeof(size));
+    int ret = user_net_context.comm.Bcast(&size, sizeof(size));
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply size failed");
     }
-    ret = net_context.comm.Bcast(const_cast<char*>(buf.data()), buf.size());
+    ret = user_net_context.comm.Bcast(const_cast<char*>(buf.data()), buf.size());
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply failed");
     }
@@ -1615,22 +1640,18 @@ int horovod_get_action() {
     return reply.action();
   } else {
     int size = -1;
-    auto ret = net_context.comm.Bcast(&size, sizeof(size));
+    auto ret = user_net_context.comm.Bcast(&size, sizeof(size));
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply size failed");
     }
     auto buf = new char[size];
-    ret = net_context.comm.Bcast(buf, size);
+    ret = user_net_context.comm.Bcast(buf, size);
     if (ret != 0) {
       throw std::runtime_error("Bcast action reply failed");
     }
 
     reply.ParseFromString(string(buf, size));
     delete[] buf;
-
-    if (!reply.status.ok()) {
-      return -1;
-    }
 
     auto action = reply.action();
     if (action == NUM_NODE_REDUCED) {

@@ -48,6 +48,8 @@ Status CheckInitialized();
 
 extern "C" {
 
+int get_action();
+
 // C interface to initialize Horovod.
 void horovod_init(const int *ranks, int nranks, bool dummy);
 

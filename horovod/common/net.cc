@@ -161,7 +161,7 @@ int ClientSocket::Connect(bool blocking) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     retries++;
 
-    if (retries % 10 == 0) {
+    if (retries % 100 == 0) {
       LOG(WARNING) << "Failed to connect " << ip_ << ":" << port_ << " " << retries << " times";
     }
   } while (blocking);
@@ -177,8 +177,6 @@ int ClientSocket::Connect(bool blocking) {
 }
 
 int ClientSocket::Send(const void* buf, int size) {
-  std::lock_guard<std::mutex> guard(lock_);
-
   int nwritten, totlen = 0;
   const char* p = static_cast<const char*>(buf);
   while (totlen != size) {
@@ -197,8 +195,6 @@ int ClientSocket::Send(const void* buf, int size) {
 }
 
 int ClientSocket::Recv(void* buf, int size) {
-  std::lock_guard<std::mutex> guard(lock_);
-
   int nread, totlen = 0;
   char* p = static_cast<char*>(buf);
   while (totlen != size) {

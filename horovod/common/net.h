@@ -123,10 +123,6 @@ class ClientSocket: public Socket {
    * return: size of data received
    */
   int Recv(stringstream& ss, int size = DEFAULT_RECV_SIZE);
-
- private:
-  std::mutex lock_;
-
 };
 
 class ServerSocket: public Socket {

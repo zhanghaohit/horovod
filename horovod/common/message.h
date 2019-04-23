@@ -19,6 +19,9 @@
 
 #include <string>
 #include <vector>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
 
 namespace horovod {
 namespace common {
@@ -39,13 +42,46 @@ enum DataType {
 
 const std::string& DataType_Name(DataType value);
 
+template <class T>
+class Syncer {
+ public:
+  T Wait() {
+    std::cout << "Wait for conditional var" << std::endl;
+    std::unique_lock<std::mutex> lk(lock_);
+    cv_.wait(lk, [this] { return ready_;});
+    std::cout << "Wait done for conditional var" << std::endl;
+    return value_;
+  }
+
+  void Notify(const T &value) {
+    {
+      std::cout << "Signal conditional var" << std::endl;
+      std::lock_guard<std::mutex> lk(lock_);
+      value_ = value;
+      ready_ = true;
+      std::cout << "Signalled conditional var" << std::endl;
+    }
+    cv_.notify_one();
+  }
+
+  T value() const {
+    return value_;
+  }
+
+ private:
+  std::mutex lock_;
+  std::condition_variable cv_;
+  T value_;
+  bool ready_ = false;
+};
+
 // A Request is a message sent from a rank greater than zero to the
 // coordinator (rank zero), informing the coordinator of an operation that
 // the rank wants to do and the tensor that it wants to apply the operation to.
 class Request {
 public:
   enum RequestType {
-    ALLREDUCE = 0, ALLGATHER = 1, BROADCAST = 2
+    ALLREDUCE = 0, ALLGATHER = 1, BROADCAST = 2, GETACTION=3
   };
 
   static const std::string& RequestType_Name(RequestType value);

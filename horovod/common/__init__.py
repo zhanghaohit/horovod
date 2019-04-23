@@ -173,7 +173,7 @@ class HorovodBasics(object):
             NEW_NODE_READY = 1;
             NUM_NODE_REDUCED = 2;
             SHOULD_STOP = 3;
-          if GRPC error from central controller, return -1
+          if GRPC error from central controller, throw invalid_argument
         """
         return self.MPI_LIB_CTYPES.horovod_get_action()
 
