@@ -298,13 +298,17 @@ int SocketCommunicator::Gather(const void *sendbuf, int sendsize, void *recvbuf,
   char *rb = static_cast<char*>(recvbuf);
   if (root == rank_) {  // master
     for (int i = 0; i < num_ranks_; i++) {
-      if (i == rank_) continue;
-
-      auto s = clients_.at(i)->Recv(rb + i * sendsize, sendsize);
-      if (s != sendsize) {
-        LOG(ERROR, rank_) << "Gather failed: received " << s
-            << " bytes data, expected " << sendsize << " bytes data";
-        return -1;
+      if (i == rank_) {
+        if (sendbuf != nullptr) {
+          memcpy(rb + i * sendsize, sendbuf, sendsize);
+        }
+      } else {
+        auto s = clients_.at(i)->Recv(rb + i * sendsize, sendsize);
+        if (s != sendsize) {
+          LOG(ERROR, rank_) << "Gather failed: received " << s
+              << " bytes data, expected " << sendsize << " bytes data";
+          return -1;
+        }
       }
     }
   } else {
@@ -405,6 +409,44 @@ int SocketCommunicator::Gatherv(const void *sendbuf, int sendsize,
     }
   }
   return 0;
+}
+
+int SocketCommunicator::AllReduce(
+    const void *sendbuf, void *recvbuf, int size, AllReduceOp op, int root) {
+  if (sendbuf == nullptr) sendbuf = recvbuf;
+
+  char *gbuf = nullptr;
+  if (rank_ == root) {
+    gbuf = new char[size * num_ranks_];
+  }
+
+  int ret = Gather(sendbuf, size, gbuf, root);
+  if (ret != 0) {
+    LOG(ERROR, rank_) << "Gather failed";
+    if (gbuf) delete[] gbuf;
+    return ret;
+  }
+
+  if (rank_ == root) {
+    memcpy(recvbuf, &gbuf[0], size);
+    for (int i = 1; i < num_ranks_; i++) {
+      ret = op(recvbuf, &gbuf[i * size], recvbuf, size);
+      if (ret != 0) {
+        LOG(ERROR, rank_) << "Apply op failed";
+        if (gbuf) delete[] gbuf;
+        return ret;
+      }
+    }
+
+  }
+
+  ret = Bcast(recvbuf, size, root);
+  if (ret != 0) {
+    LOG(ERROR, rank_) << "AllReduce Bcast failed: " << ret;
+  }
+
+  if (gbuf) delete[] gbuf;
+  return ret;
 }
 
 int SocketCommunicator::Init(int rank, int num_ranks, const string &master_uri, int root) {

@@ -1,5 +1,6 @@
 #include "socket_operations.h"
 #include "../logging.h"
+#include "../half.h"
 
 namespace horovod {
 namespace common {
@@ -52,7 +53,7 @@ Status SocketAllgather::Execute(std::vector<TensorTableEntry>& entries, const Re
     buffer_data = (void*) first_entry.output->data();
   }
 
-  global_state_->timeline.ActivityStartAll(entries, "SOCKET_ALLGATHER");
+  global_state_->timeline.ActivityStartAll(entries, SOCKET_ALLGATHER);
   // transform element-wise count to byte-wise counts
   auto* recvsizes = new int[global_state_->size]();
   auto* displcmntsizes = new int[global_state_->size]();
@@ -110,13 +111,116 @@ Status SocketBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Re
     data_ptr = (void*) e.output->data();
   }
 
-  global_state_->timeline.ActivityStartAll(entries, "Socket_Bcast");
+  global_state_->timeline.ActivityStartAll(entries, SOCKET_BCAST);
   auto ret = socket_context_->comm.Bcast(
       data_ptr, e.tensor->shape().num_elements() * GetSizeof(e.tensor), e.root_rank, e.ranks);
   if (ret != 0) {
     throw std::logic_error("Socket_Broadcast failed.");
   }
   global_state_->timeline.ActivityEndAll(entries);
+  return Status::OK();
+}
+
+SocketAllreduce::SocketAllreduce(SocketContext* socket_context, HorovodGlobalState* global_state)
+    : AllreduceOp(global_state), socket_context_(socket_context) {}
+
+void SocketAllreduce::MemcpyEntryInFusionBuffer(const std::vector<TensorTableEntry>& entries,
+                                             const TensorTableEntry& e, void* buffer_data_at_offset) {
+  std::memcpy(buffer_data_at_offset, e.tensor->data(), (size_t) e.tensor->size());
+}
+
+void SocketAllreduce::MemcpyEntryOutFusionBuffer(const std::vector<TensorTableEntry>& entries,
+                                              const void* buffer_data_at_offset, TensorTableEntry& e) {
+  std::memcpy((void*) e.output->data(), buffer_data_at_offset, (size_t) e.tensor->size());
+}
+
+Status SocketAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  LOG(DEBUG) << "SocketAllReduce";
+  auto& first_entry = entries[0];
+
+  void* buffer_data;
+  size_t buffer_len;
+  int64_t num_elements = NumElements(entries);
+
+  // Copy memory into the fusion buffer.
+  auto& timeline = global_state_->timeline;
+  if (entries.size() > 1) {
+    timeline.ActivityStartAll(entries, MEMCPY_IN_FUSION_BUFFER);
+    const void* fused_input_data;
+    MemcpyInFusionBuffer(entries, fused_input_data, buffer_data, buffer_len);
+    timeline.ActivityEndAll(entries);
+  } else {
+    buffer_data = (void*) first_entry.output->data();
+    buffer_len = (size_t) first_entry.output->size();
+  }
+
+  // Do allreduce.
+  timeline.ActivityStartAll(entries, SOCKET_ALLREDUCE);
+  const void* sendbuf = entries.size() > 1 || first_entry.tensor->data() == first_entry.output->data()
+                        ? buffer_data : first_entry.tensor->data();
+
+  auto op = [dtype=first_entry.tensor->dtype()](const void *a, const void *b, void *res, int size) -> int {
+    assert(size % GetSizeof(dtype) == 0);
+    if (dtype == HOROVOD_FLOAT16) {
+      memcpy(res, a, size);
+      int num = size / GetSizeof(dtype);
+      float16_sum(const_cast<void*>(b), res, &num, nullptr);  // b will not be modified
+    } else {
+      for (int i = 0; i < size / GetSizeof(dtype); i++) {
+        switch (dtype) {
+          case HOROVOD_INT32:
+            {
+              auto ia = static_cast<const int*>(a);
+              auto ib = static_cast<const int*>(b);
+              auto ires = static_cast<int*>(res);
+              *(ires + i) = *(ia + i) + *(ib + i);
+              break;
+            }
+          case HOROVOD_INT64:
+            {
+              auto ia = static_cast<const int64_t*>(a);
+              auto ib = static_cast<const int64_t*>(b);
+              auto ires = static_cast<int64_t*>(res);
+              *(ires + i) = *(ia + i) + *(ib + i);
+              break;
+            }
+          case HOROVOD_FLOAT32:
+            {
+              auto ia = static_cast<const float*>(a);
+              auto ib = static_cast<const float*>(b);
+              auto ires = static_cast<float*>(res);
+              *(ires + i) = *(ia + i) + *(ib + i);
+              break;
+            }
+          case HOROVOD_FLOAT64:
+            {
+              auto ia = static_cast<const double*>(a);
+              auto ib = static_cast<const double*>(b);
+              auto ires = static_cast<double*>(res);
+              *(ires + i) = *(ia + i) + *(ib + i);
+              break;
+            }
+          default:
+            throw std::logic_error("Type " + DataType_Name(dtype) + " is not supported.");
+        }
+      }
+    }
+    return 0;
+  };
+  int ret = socket_context_->comm.AllReduce(
+      sendbuf, buffer_data, (int) num_elements * GetSizeof(first_entry.tensor), op);
+  if (ret != 0) {
+    throw std::logic_error("Socket_Allreduce failed.");
+  }
+  timeline.ActivityEndAll(entries);
+
+  // Copy memory out of the fusion buffer.
+  if (entries.size() > 1) {
+    timeline.ActivityStartAll(entries, MEMCPY_OUT_FUSION_BUFFER);
+    MemcpyOutFusionBuffer(buffer_data, entries);
+    timeline.ActivityEndAll(entries);
+  }
+
   return Status::OK();
 }
 

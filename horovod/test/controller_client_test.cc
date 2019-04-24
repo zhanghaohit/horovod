@@ -6,7 +6,7 @@ using namespace grpcservice;
 using std::string;
 
 TEST(ControllerClientTest, MasterURI) {
-  string job_name = "example-autobotjob";
+  string job_name = "dynamic-autobotjob";
   string ns_name = "video-structure";
   ControllerClient client("10.80.22.18:9001");
   client.set_job_name(job_name);

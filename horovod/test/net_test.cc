@@ -316,45 +316,88 @@ TEST(NetTest, ReInitTest) {
 
 TEST(NetTest, AllGathervTest) {
   auto master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
+  int num_ranks = 3;
+
+  std::vector<std::thread> threads;
+  std::vector<string> strs;
+  string gstr;
+  int total_size = 0;
+  for (int i = 0; i < num_ranks; i++) {
+    strs.emplace_back(string(i + 100, i));
+    gstr += strs.back();
+    total_size += i + 100;
+  }
+  for (int i = 0; i < num_ranks; i++) {
+    threads.emplace_back(std::thread([&, rank=i]{
+      SocketCommunicator comm;
+      comm.Init(rank, num_ranks, master_uri);
+
+      int displcmnts[num_ranks];
+      int recvcounts[num_ranks];
+      for (int j = 0; j < num_ranks; j++) {
+        recvcounts[j] = strs[j].size();
+      }
+      displcmnts[0] = 0;
+      for (int j = 1; j < num_ranks; j++) {
+        displcmnts[j] = displcmnts[j - 1] +  recvcounts[j - 1];
+      }
+      auto buf = new char[total_size];
+      auto ret = comm.AllGatherv(strs[rank].data(), strs[rank].size(), buf, recvcounts, displcmnts);
+      EXPECT_EQ(ret, 0);
+      EXPECT_EQ(string(buf, total_size), gstr);
+
+      memset(buf, 0, total_size);
+      memcpy(buf + displcmnts[rank], strs[rank].data(), strs[rank].size());
+      ret = comm.AllGatherv(nullptr, strs[rank].size(), buf, recvcounts, displcmnts);
+      EXPECT_EQ(ret, 0);
+      EXPECT_EQ(string(buf, total_size), gstr);
+      delete[] buf;
+    }));
+  }
+
+  for (int i = 0; i < num_ranks; i++) {
+    threads[i].join();
+  }
+}
+
+TEST(NetTest, AllReduce) {
+  auto master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
   std::vector<int> sizes = {100};
   int num_ranks = 3;
 
   for (auto &size : sizes) {
     std::cout << "Run test for size " << size << std::endl;
     std::vector<std::thread> threads;
-    std::vector<string> strs;
-    string gstr;
-    int total_size = 0;
+    std::vector<std::vector<float>> datas;
+    std::vector<float> res(size);
     for (int i = 0; i < num_ranks; i++) {
-      strs.emplace_back(string(size, i));
-      gstr += strs.back();
-      total_size += size;
+      std::vector<float> data(size);
+      for (int j = 0; j < size; j++) {
+        data[j] = j + i;
+        res[j] += data[j];
+      }
+      datas.emplace_back(data);
     }
     for (int i = 0; i < num_ranks; i++) {
       threads.emplace_back(std::thread([&, rank=i]{
         SocketCommunicator comm;
         comm.Init(rank, num_ranks, master_uri);
 
-        int displcmnts[num_ranks];
-        int recvcounts[num_ranks];
-        for (int j = 0; j < num_ranks; j++) {
-          recvcounts[j] = strs[j].size();
-        }
-        displcmnts[0] = 0;
-        for (int j = 1; j < num_ranks; j++) {
-          displcmnts[j] = displcmnts[j - 1] +  recvcounts[j - 1];
-        }
-        auto buf = new char[total_size];
-        auto ret = comm.AllGatherv(strs[rank].data(), strs[rank].size(), buf, recvcounts, displcmnts);
-        EXPECT_EQ(ret, 0);
-        EXPECT_EQ(string(buf, size * num_ranks), gstr);
+        auto op = [](const void *a, const void *b, void *res, int size) {
+          const float *fa = static_cast<const float*>(a);
+          const float *fb = static_cast<const float*>(b);
+          float *fres = static_cast<float*>(res);
 
-        memset(buf, 0, total_size);
-        memcpy(buf + rank * size, strs[rank].data(), strs[rank].size());
-        ret = comm.AllGatherv(nullptr, strs[rank].size(), buf, recvcounts, displcmnts);
+          EXPECT_EQ(size % sizeof(float), 0);
+          for (int i = 0; i < size / sizeof(float); i++) {
+            fres[i] = fa[i] + fb[i];
+          }
+
+          return 0;
+        };
+        auto ret = comm.AllReduce(datas[rank].data(), datas[rank].data(), size * sizeof(float), op);
         EXPECT_EQ(ret, 0);
-        EXPECT_EQ(string(buf, size * num_ranks), gstr);
-        delete[] buf;
+        EXPECT_EQ(datas[rank], res);
       }));
     }
 
@@ -363,4 +406,3 @@ TEST(NetTest, AllGathervTest) {
     }
   }
 }
-

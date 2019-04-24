@@ -152,6 +152,8 @@ class ServerSocket: public Socket {
 
 class SocketCommunicator {
  public:
+  using AllReduceOp = std::function<int(const void *a, const void *b, void *res, int size)>;
+
   ~SocketCommunicator();
   int Init(int rank, int num_ranks, const std::string &master_uri, int root = 0);
 
@@ -174,6 +176,9 @@ class SocketCommunicator {
               void *recvbuf, const int *recvsizes, const int *displs, int root = 0);
 
   int Barrier(int root = 0);
+
+  int AllReduce(
+      const void *sendbuf, void *recvbuf, int sendsize, AllReduceOp op, int root = 0);
 
   int rank() const {
     return rank_;

@@ -149,10 +149,11 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 #else
   #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
     #if DYNAMIC_SCHEDULE
-      LOG(INFO, state.rank) << "Enable Dynamic NCCLAllReduce";
+      LOG(INFO, state.rank) << "Enable Dynamic NCCLAllReduce and SocketAllReduce";
       allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
           new NCCLAllreduce(&nccl_context, nullptr, &net_context, &cuda_context, &state)));
-      LOG(INFO, state.rank) << "Enable SocketAllReduce";
+      allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new SocketAllreduce(&net_context, &state)));
+      LOG(INFO, state.rank) << "Enable SocketAllGather";
       allgather_ops.push_back(std::shared_ptr<AllgatherOp>(new SocketAllgather(&net_context, &state)));
     #else
       allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
@@ -1636,6 +1637,11 @@ int horovod_get_action() {
 int get_action() {
   if (!horovod_global.initialization_done) {
     LOG(ERROR) << "Horovod is not inited";
+    return -1;
+  }
+
+  if (!ctl_client_) {
+    LOG(ERROR) << "Central controller client is not inited";
     return -1;
   }
 
