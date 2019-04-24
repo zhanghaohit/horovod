@@ -219,8 +219,8 @@ class SocketCommunicator {
  private:
   int root_ = 0;
   int rank_ = 0;
-  int num_ranks_ = 0;
-  bool is_master_ = false;
+  int num_ranks_ = 1;
+  bool is_master_ = true;
   string master_ip_;
   int master_port_ = 0;
 

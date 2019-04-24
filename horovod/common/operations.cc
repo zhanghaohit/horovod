@@ -812,18 +812,18 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 #else
   int rank = 0, num_ranks = 1;
   bool is_coordinator = true;
-  string master_uri;
-  if (is_coordinator) {
-    // get its local ip
-    master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
-  }
-
   if (state.dummy) {
     LOG(WARNING) << "Pseudo init horovod";
   } else {
     auto rstr = GetEnv("AUTOBOT_RANK");
     rank  = rstr.empty() ? 0 : std::stoi(rstr);
     is_coordinator = rank == 0;
+
+    string master_uri;
+    if (is_coordinator) {
+      // get its local ip
+      master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
+    }
 
     init_ctl_client();
 
@@ -844,9 +844,9 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
           throw std::invalid_argument("Cannot get master uri for either central controller or env");
       }
     }
+    net_context.comm.Init(rank, num_ranks, master_uri);
   }
   LOG(WARNING, rank) << "Using Socket for communication";
-  net_context.comm.Init(rank, num_ranks, master_uri);
 #endif
 
   // Get MPI size to determine how many tensors to wait for before reducing.
@@ -1599,18 +1599,15 @@ extern "C" {
 #if DYNAMIC_SCHEDULE
 using namespace grpcservice;
 
-unsigned seed = 1;
-
 int horovod_get_action() {
   Request message;
   message.set_request_type(Request::GETACTION);
   message.set_request_rank(horovod_global.rank);
 
-  string name = "get_action_" + std::to_string(rand_r(&seed));
+  string name = "get_action";
   message.set_tensor_name(name);
 
   Syncer<int> syncer;
-
   TensorTableEntry e;
   e.tensor_name = name;
   e.callback = [&syncer, &name](const common::Status& status) {
@@ -1621,7 +1618,6 @@ int horovod_get_action() {
 
   {
     std::lock_guard<std::mutex> guard(horovod_global.mutex);
-
     if (horovod_global.tensor_table.find(name) != horovod_global.tensor_table.end()) {
       LOG(ERROR) << "Duplicate tensor name " << name;
       return -1;
