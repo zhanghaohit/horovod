@@ -161,6 +161,8 @@ int ClientSocket::Connect(bool blocking) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     retries++;
 
+    LOG(DEBUG) << "Failed to connect " << ip_ << ":" << port_;
+
     if (retries % 100 == 0) {
       LOG(WARNING) << "Failed to connect " << ip_ << ":" << port_ << " " << retries << " times";
     }
@@ -488,6 +490,7 @@ int SocketCommunicator::Init(int rank, int num_ranks, const string &master_uri, 
           << " (" << client->ip() << ":" << client->port() << ")";
       clients_.emplace(rank, std::move(client));
     }
+    master_.reset();  // close the master socket first in case clients connected in next phase
   } else {  // if worker, connect with master
     clients_.clear();
     clients_.emplace(0, std::unique_ptr<ClientSocket>(new ClientSocket(master_ip_, master_port_)));
@@ -510,7 +513,6 @@ void SocketCommunicator::Destroy() {
   if (rank_ == root_) {
     // TODO(hzhang): no need to close the connection if the client is not evicted
     // wait for all the other clients to close the connections first
-    master_.reset();  // close the master socket first in case clients connected in next phase
     for (auto &it : clients_) {
       it.second->Send(cl.data(), cl.size());
       LOG(DEBUG, rank_) << "Wait for rank " << it.first << " to close";

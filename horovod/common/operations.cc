@@ -1166,13 +1166,39 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator) {
   // This delay determines thread frequency and MPI message latency
   auto start_time = std::chrono::steady_clock::now();
-  auto sleep_duration = state.last_cycle_start +
-                        std::chrono::microseconds(
-                            long(state.param_manager.CycleTimeMs() * 1000.)) -
-                        start_time;
+  auto sleep_duration = state.last_cycle_start + std::chrono::microseconds(
+      long(state.param_manager.CycleTimeMs() * 1000.)) - start_time;
+
+#if DYNAMIC_SCHEDULE
+  auto mini_sleep_duration = std::chrono::microseconds(100);
+  auto horovod_mini_cycle_time = std::getenv("HOROVOD_MINI_CYCLE_TIME");
+  if (horovod_mini_cycle_time != nullptr) {
+    float mini_cycle_time = std::strtof(horovod_mini_cycle_time, nullptr);
+    mini_sleep_duration = std::chrono::microseconds(long(mini_cycle_time * 1000.));
+  }
+
+  while (true) {
+    if (state.get_action_exists) {
+      state.get_action_exists = false;
+      break;
+    }
+
+    if (sleep_duration <= std::chrono::steady_clock::duration::zero()) {
+      break;
+    } else if (sleep_duration > mini_sleep_duration) {
+      std::this_thread::sleep_for(mini_sleep_duration);
+      sleep_duration -= mini_sleep_duration;
+    } else {
+      std::this_thread::sleep_for(sleep_duration);
+      break;
+    }
+  }
+#else
   if (sleep_duration > std::chrono::steady_clock::duration::zero()) {
     std::this_thread::sleep_for(sleep_duration);
   }
+#endif
+
   state.last_cycle_start = std::chrono::steady_clock::now();
 
   if (state.mark_cycles_in_timeline) {
@@ -1566,7 +1592,9 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 // only done once no matter how many times this function is called.
 void InitializeHorovodOnce(const int* ranks, int nranks, bool dummy) {
   // Ensure background thread is only started once.
+#if DYNAMIC_SCHEDULE
   horovod_global.dummy = dummy;
+#endif
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {
       horovod_global.ranks.push_back(ranks[i]);
@@ -1627,6 +1655,7 @@ int horovod_get_action() {
     horovod_global.message_queue.push(message);
     LOG(DEBUG, horovod_global.rank) << "Enqueued GETACTION " << name;
   }
+  horovod_global.get_action_exists = true;
   return syncer.Wait();
 }
 

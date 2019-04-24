@@ -124,7 +124,10 @@ struct HorovodGlobalState {
   // name) and time point when tensor started allreduce op.
   std::unique_ptr<MessageTable> message_table;
 
+#if DYNAMIC_SCHEDULE
   bool dummy = false;
+  volatile bool get_action_exists = false;
+#endif
 
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
