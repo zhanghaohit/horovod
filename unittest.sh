@@ -15,4 +15,14 @@ if [[ $command == build ]]; then
   g++ -std=c++14 -O2 -g -o unittest horovod/test/*.cc $SRC $LIBS
 elif [[ $command == run ]]; then
   echo "run unittest"
+  ./unittest
+  cd horovod
+  for num_ranks in 1 2 3
+  do
+    for i in $(seq 0 $((num_ranks-1)))
+    do
+      NCCL_DEBUG=WARN HOROVOD_LOG_LEVEL=info AUTOBOT_NUM_RANKS=$num_ranks AUTOBOT_RANK=$i AUTOBOT_MASTER_URI=localhost:12345 pytest -s &
+    done
+    wait
+  done
 fi

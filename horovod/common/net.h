@@ -184,6 +184,8 @@ class SocketCommunicator {
     return rank_;
   }
 
+  void set_num_ranks(int num_ranks);
+
   int num_ranks() const {
     return num_ranks_;
   }

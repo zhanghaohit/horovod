@@ -828,10 +828,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     init_ctl_client();
 
     if (ctl_client_) {
-      num_ranks = ctl_client_->GetNumOfRanks();
       if (is_coordinator) {
+        num_ranks = ctl_client_->GetNumOfRanks();
         ctl_client_->SetMasterURI(master_uri);
       } else {
+        num_ranks = -1;
         master_uri = ctl_client_->GetMasterURI();
       }
       LOG(INFO) << "From central controller: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
@@ -845,6 +846,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
       }
     }
     net_context.comm.Init(rank, num_ranks, master_uri);
+    // NOTE: below is to wait for the final num_ranks after all nodes are ready
+    if (ctl_client_ && !is_coordinator) {
+      num_ranks = ctl_client_->GetNumOfRanks();
+      net_context.comm.set_num_ranks(num_ranks);
+    }
   }
   LOG(WARNING, rank) << "Using Socket for communication";
 #endif

@@ -451,6 +451,18 @@ int SocketCommunicator::AllReduce(
   return ret;
 }
 
+void SocketCommunicator::set_num_ranks(int num_ranks) {
+  if (num_ranks != num_ranks_) {
+    if (is_master_) {
+      LOG(ERROR) << "Master does not allow to change num_ranks after init";
+      return;
+    }
+
+    LOG(INFO) << "Change num_ranks from " << num_ranks_ << " to " << num_ranks;
+    num_ranks_ = num_ranks;
+  }
+}
+
 int SocketCommunicator::Init(int rank, int num_ranks, const string &master_uri, int root) {
   root_ = root;
   rank_ = rank;
