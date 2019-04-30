@@ -77,6 +77,10 @@ def _normalize_name(name):
     return re.sub('[^a-zA-Z0-9_]', '_', name)
 
 
+def rank_size():
+    return tf.py_func(size, [], tf.int64)
+
+
 def _allreduce(tensor, name=None):
     """An op which sums an input tensor over all the Horovod processes.
 
@@ -143,7 +147,7 @@ def _allgather_grad(op, grad):
     d0 = x.get_shape().as_list()[0]
     d = tf.convert_to_tensor([d0], dtype=tf.int32)
 
-    s = size()
+    s = rank_size()
     d = tf.reshape(allgather(d), [s])
 
     splits = tf.split(grad, num_or_size_splits=d, axis=0)

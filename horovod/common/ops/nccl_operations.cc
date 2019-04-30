@@ -162,6 +162,8 @@ void NCCLOp::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
     }
 
     timeline.ActivityEndAll(entries);
+
+    LOG(INFO) << "Init nccl_comm";
   }
 
   nccl_comm_ = &nccl_comm;

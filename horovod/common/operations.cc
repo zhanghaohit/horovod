@@ -1775,6 +1775,7 @@ int horovod_local_rank() {
 
 int horovod_size() {
   if (!horovod_global.initialization_done) {
+    LOG(ERROR) << "Horovod is not initied when calling horovod_size()";
     return -1;
   }
   return horovod_global.size;
