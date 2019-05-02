@@ -687,11 +687,13 @@ bool CheckForStalledTensors(HorovodGlobalState& state, MPIContext& ctx) {
   return should_shut_down;
 }
 
-string GetEnv(const char *name) {
+string GetEnv(const char *name, bool required = false) {
   if (const char *env_p = std::getenv(name)) {
     return env_p;
+  } else if (required) {
+    throw std::invalid_argument(std::string(name) + " is not configured");
   } else {
-    LOG(ERROR) << name << " is not configured";
+    LOG(WARNING) << name << " is not configured";
     return "";
   }
 }
@@ -821,8 +823,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 
     string master_uri;
     if (is_coordinator) {
-      // get its local ip
-      master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(kDefaultPort);
+      master_uri = GetEnv("AUTOBOT_MASTER_URI");
+      if (master_uri.empty()) {
+        // get its local ip
+        master_uri = SocketCommunicator::GetIp() + ":" + std::to_string(SocketCommunicator::GetUnusedPort());
+      }
     }
 
     init_ctl_client();
@@ -840,10 +845,11 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
       auto nrstr = GetEnv("AUTOBOT_NUM_RANKS");
       num_ranks = nrstr.empty() ? 1 : std::stoi(nrstr);
       if (!is_coordinator) {
-        master_uri = GetEnv("AUTOBOT_MASTER_URI");
+        master_uri = GetEnv("AUTOBOT_MASTER_URI", true);
         if (master_uri.empty())
           throw std::invalid_argument("Cannot get master uri for either central controller or env");
       }
+      LOG(INFO) << "From env: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
     }
     net_context.comm.Init(rank, num_ranks, master_uri);
     // NOTE: below is to wait for the final num_ranks after all nodes are ready

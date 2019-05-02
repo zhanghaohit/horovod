@@ -57,6 +57,8 @@ class ControllerClient {
   int rank_ = -1;
 
   grpcservice::AutobotJobNode request_;
+
+  grpc::Status QueryWithRetries(std::function<grpc::Status()> func);
 };
 
 }  // namespace common

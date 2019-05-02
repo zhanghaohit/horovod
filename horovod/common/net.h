@@ -218,6 +218,8 @@ class SocketCommunicator {
 
   static std::string GetIp(const std::string &iface = "");
 
+  static int GetUnusedPort();
+
  private:
   int root_ = 0;
   int rank_ = 0;

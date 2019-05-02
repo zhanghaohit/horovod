@@ -601,6 +601,37 @@ std::string SocketCommunicator::GetIp(const std::string &iface) {
   return ip;
 }
 
+int SocketCommunicator::GetUnusedPort() {
+  int sockfd;
+  struct sockaddr_in myAddr;
+  socklen_t myAddrSize = sizeof(myAddr);
+
+  if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    return -1;
+  }
+
+  memset(&myAddr, 0, sizeof(struct sockaddr_in));
+  myAddr.sin_family = AF_INET;
+  myAddr.sin_addr.s_addr = INADDR_ANY;
+  myAddr.sin_port = 0;
+  if (bind(sockfd, reinterpret_cast<struct sockaddr*>(&myAddr), sizeof(struct sockaddr_in)) < 0) {
+    return -1;
+  }
+
+  if (getsockname(sockfd, reinterpret_cast<struct sockaddr*>(&myAddr), &myAddrSize) < 0) {
+    return -1;
+  }
+
+
+  if (getsockname(sockfd, reinterpret_cast<struct sockaddr*>(&myAddr), &myAddrSize) == -1) {
+    return -1;
+  }
+
+  int port = ntohs(myAddr.sin_port);
+  close(sockfd);
+  return port;
+}
+
 } // namespace common
 } // namespace horovod
 
