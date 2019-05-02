@@ -127,6 +127,7 @@ struct HorovodGlobalState {
 #if DYNAMIC_SCHEDULE
   bool dummy = false;
   volatile bool get_action_exists = false;
+  volatile bool signal_registered = false;
 #endif
 
   ~HorovodGlobalState() {

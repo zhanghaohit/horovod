@@ -520,22 +520,26 @@ SocketCommunicator::~SocketCommunicator() {
   Destroy();
 }
 
-void SocketCommunicator::Destroy() {
+void SocketCommunicator::Destroy(bool force) {
   string cl = "close";
   if (rank_ == root_) {
     // TODO(hzhang): no need to close the connection if the client is not evicted
     // wait for all the other clients to close the connections first
-    for (auto &it : clients_) {
-      it.second->Send(cl.data(), cl.size());
-      LOG(DEBUG, rank_) << "Wait for rank " << it.first << " to close";
-      it.second->Recv(1);
+    if (!force) {
+      for (auto &it : clients_) {
+        it.second->Send(cl.data(), cl.size());
+        LOG(DEBUG, rank_) << "Wait for rank " << it.first << " to close";
+        it.second->Recv(1);
+      }
     }
     clients_.clear();
   } else {
     LOG(DEBUG, rank_) << "Rank " << rank_ << " closed";
-    auto recv = clients_.at(0)->Recv(cl.size());
-    if (recv != cl) {
-      LOG(ERROR) << "Communicator close error. Close command received: " << recv;
+    if (!force) {
+      auto recv = clients_.at(0)->Recv(cl.size());
+      if (recv != cl) {
+        LOG(ERROR) << "Communicator close error. Close command received: " << recv;
+      }
     }
     clients_.clear();
   }

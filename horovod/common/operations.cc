@@ -25,6 +25,7 @@
 #include <set>
 #include <unordered_set>
 #include <boost/algorithm/string.hpp>
+#include <csignal>
 
 #define OMPI_SKIP_MPICXX
 #include "fusion_buffer_manager.h"
@@ -100,7 +101,7 @@ MPIContext mpi_context;
 #if DYNAMIC_SCHEDULE
 constexpr int kDefaultPort = 12345;
 SocketContext net_context;  // used for horovod background thread
-std::unique_ptr<ControllerClient> ctl_client_;
+std::unique_ptr<ControllerClient> ctl_client;
 #endif
 
 #if HAVE_CUDA
@@ -134,6 +135,15 @@ const Status DUPLICATE_NAME_ERROR = Status::InvalidArgument(
     "Requested to allreduce, allgather, or broadcast a tensor with the same "
     "name as another tensor that is currently being processed.  If you want "
     "to request another tensor, use a different tensor name.");
+
+#if DYNAMIC_SCHEDULE
+void CtrlCHandler(int signal) {
+  LOG(WARNING) << "Received Ctrl-C. Shutting down...";
+  net_context.comm.Destroy(true);
+  ctl_client.reset();
+  throw std::runtime_error("KeyboardInterrupt");
+}
+#endif
 
 OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   // Order of these operations is very important. Operations will be checked sequentially from the first
@@ -715,7 +725,12 @@ void set_int_from_env(const char* env, int& val) {
 
 #if DYNAMIC_SCHEDULE
 void init_ctl_client() {
-  if (!ctl_client_) {
+  if (!horovod_global.signal_registered) {
+    std::signal(SIGINT, CtrlCHandler);
+    horovod_global.signal_registered = true;
+  }
+
+  if (!ctl_client) {
     auto rstr = GetEnv("AUTOBOT_RANK");
     int rank = rstr.empty() ? 0 : std::stoi(rstr);
     string ctl_uri = GetEnv("AUTOBOT_CONTROLLER_URI");;
@@ -724,10 +739,10 @@ void init_ctl_client() {
     if (ctl_uri.empty() || job_name.empty() || ns_name.empty()) {
       LOG(ERROR, rank) << "Autobot central controller uri is not defined. Will fall back to use env settings";
     } else {
-      ctl_client_.reset(new ControllerClient(ctl_uri));
-      ctl_client_->set_job_name(job_name);
-      ctl_client_->set_namespace_name(ns_name);
-      ctl_client_->set_rank(rank);
+      ctl_client.reset(new ControllerClient(ctl_uri));
+      ctl_client->set_job_name(job_name);
+      ctl_client->set_namespace_name(ns_name);
+      ctl_client->set_rank(rank);
     }
   }
 }
@@ -832,13 +847,13 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
 
     init_ctl_client();
 
-    if (ctl_client_) {
+    if (ctl_client) {
       if (is_coordinator) {
-        num_ranks = ctl_client_->GetNumOfRanks();
-        ctl_client_->SetMasterURI(master_uri);
+        num_ranks = ctl_client->GetNumOfRanks();
+        ctl_client->SetMasterURI(master_uri);
       } else {
         num_ranks = -1;
-        master_uri = ctl_client_->GetMasterURI();
+        master_uri = ctl_client->GetMasterURI();
       }
       LOG(INFO) << "From central controller: master uri: " << master_uri << ", num_of_ranks:" << num_ranks;
     } else {
@@ -853,8 +868,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     }
     net_context.comm.Init(rank, num_ranks, master_uri);
     // NOTE: below is to wait for the final num_ranks after all nodes are ready
-    if (ctl_client_ && !is_coordinator) {
-      num_ranks = ctl_client_->GetNumOfRanks();
+    if (ctl_client && !is_coordinator) {
+      num_ranks = ctl_client->GetNumOfRanks();
       net_context.comm.set_num_ranks(num_ranks);
     }
   }
@@ -1606,6 +1621,10 @@ void InitializeHorovodOnce(const int* ranks, int nranks, bool dummy) {
   // Ensure background thread is only started once.
 #if DYNAMIC_SCHEDULE
   horovod_global.dummy = dummy;
+  if (!horovod_global.signal_registered) {
+    std::signal(SIGINT, CtrlCHandler);
+    horovod_global.signal_registered = true;
+  }
 #endif
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {
@@ -1677,14 +1696,14 @@ int get_action() {
     return -1;
   }
 
-  if (!ctl_client_) {
+  if (!ctl_client) {
     LOG(ERROR) << "Central controller client is not inited";
     return -1;
   }
 
   ActionReply reply;
   if (horovod_global.rank == 0) {
-    reply = ctl_client_->GetAction();
+    reply = ctl_client->GetAction();
 
     string buf;
     reply.SerializeToString(&buf);
@@ -1728,12 +1747,12 @@ int get_action() {
 
 int horovod_graph_ready() {
   init_ctl_client();  // allow this func to be called before init
-  return ctl_client_->GraphReady();
+  return ctl_client->GraphReady();
 }
 
 int horovod_ready_to_stop() {
   init_ctl_client();  // allow this func to be called before init
-  return ctl_client_->ReadyToStop();
+  return ctl_client->ReadyToStop();
 }
 
 #endif

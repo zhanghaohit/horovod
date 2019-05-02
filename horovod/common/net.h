@@ -157,7 +157,7 @@ class SocketCommunicator {
   ~SocketCommunicator();
   int Init(int rank, int num_ranks, const std::string &master_uri, int root = 0);
 
-  void Destroy();
+  void Destroy(bool force = false);
 
   int Bcast(void *buffer, int size, int root = 0, const std::vector<int> &ranks = std::vector<int>());
 
