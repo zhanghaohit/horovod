@@ -888,7 +888,6 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   }
 
 #if DYNAMIC_SCHEDULE
-  // FIXME(hzhang): cal the real local rank
   uint64_t host_hashs[size];
   auto hostname = SocketCommunicator::GetHostName();
   host_hashs[rank] = SocketCommunicator::GetHostHash(hostname);

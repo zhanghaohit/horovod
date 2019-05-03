@@ -491,7 +491,6 @@ int SocketCommunicator::Init(int rank, int num_ranks, const string &master_uri, 
     master_.reset(new ServerSocket(master_port_));
     master_->Listen();
 
-    // TODO(hzhang): rank to client map
     // establish num_ranks_ - 1 connections with all workers
     for (int i = 1; i < num_ranks_; i++) {
       auto client = std::unique_ptr<ClientSocket>(master_->Accept());
