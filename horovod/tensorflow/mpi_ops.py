@@ -47,6 +47,7 @@ from tensorflow.python.ops import variables as tf_variables
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.training import distribution_strategy_context
 from tensorflow.python.util.tf_export import tf_export
+from tensorflow.python.layers import base
 
 from horovod.common import get_ext_suffix
 from horovod.common import HorovodBasics as _HorovodBasics
@@ -108,7 +109,7 @@ def rank_size():
     return ret
 
 
-def _allreduce(tensor, name=None):
+def _allreduce(tensor, name=None, exec_imm=False):
     """An op which sums an input tensor over all the Horovod processes.
 
     The reduction operation is keyed by the name of the op. The tensor type and
@@ -121,6 +122,8 @@ def _allreduce(tensor, name=None):
     """
     if name is None and not _executing_eagerly():
         name = 'HorovodAllreduce_%s' % _normalize_name(tensor.name)
+    if exec_imm is True:
+        name += '_ExecImm'
     return MPI_LIB.horovod_allreduce(tensor, name=name)
 
 
@@ -135,7 +138,7 @@ def _allreduce_grad(op, grad):
     Returns:
       The gradient with respect to the input of the op.
     """
-    return _allreduce(grad)
+    return _allreduce(grad, exec_imm=True)
 
 
 def allgather(tensor, name=None):
@@ -219,8 +222,8 @@ def _broadcast_grad(op, grad):
     return grad_reduced
 
 
-@tf_export('horovod.layers.BatchNormalization')
-class BatchNormalization(Layer):
+@tf_export('horovod.layers.BatchNormalizationImpl')
+class BatchNormalizationImpl(Layer):
   """Batch normalization layer (Ioffe and Szegedy, 2014).
 
   Normalize the activations of the previous layer at each batch,
@@ -322,7 +325,7 @@ class BatchNormalization(Layer):
                adjustment=None,
                name=None,
                **kwargs):
-    super(BatchNormalization, self).__init__(
+    super(BatchNormalizationImpl, self).__init__(
         name=name, trainable=trainable, **kwargs)
     if isinstance(axis, list):
       self.axis = axis[:]
@@ -753,8 +756,8 @@ class BatchNormalization(Layer):
       # mean, variance = nn.moments(inputs, reduction_axes, keep_dims=keep_dims)
       mean = tf.reduce_mean(inputs, reduction_axes, keepdims=keep_dims)
       mean_square = tf.reduce_mean(tf.square(inputs), reduction_axes, keepdims=keep_dims)
-      mean = tf.div(_allreduce(mean), tf.cast(rank_size(), dtype=inputs.dtype))
-      mean_square = tf.div(_allreduce(mean_square), tf.cast(rank_size(), dtype=inputs.dtype))
+      mean = tf.div(_allreduce(mean, exec_imm=True), tf.cast(rank_size(), dtype=inputs.dtype))
+      mean_square = tf.div(_allreduce(mean_square, exec_imm=True), tf.cast(rank_size(), dtype=inputs.dtype))
       variance = mean_square - tf.square(mean)
       # end of sync bn
 
@@ -864,8 +867,137 @@ class BatchNormalization(Layer):
                       'layer cannot be serialized and has been omitted from '
                       'the layer config. It will not be included when '
                       're-creating the layer from the saved config.')
-    base_config = super(BatchNormalization, self).get_config()
+    base_config = super(BatchNormalizationImpl, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
+
+
+@tf_export('horovod.layers.BatchNormalization')
+class BatchNormalization(BatchNormalizationImpl, base.Layer):
+  """Batch Normalization layer from http://arxiv.org/abs/1502.03167.
+
+  "Batch Normalization: Accelerating Deep Network Training by Reducing
+  Internal Covariate Shift"
+
+  Sergey Ioffe, Christian Szegedy
+
+  Arguments:
+    axis: An `int` or list of `int`, the axis or axes that should be
+        normalized, typically the features axis/axes. For instance, after a
+        `Conv2D` layer with `data_format="channels_first"`, set `axis=1`. If a
+        list of axes is provided, each axis in `axis` will be normalized
+        simultaneously. Default is `-1` which uses the last axis. Note: when
+        using multi-axis batch norm, the `beta`, `gamma`, `moving_mean`, and
+        `moving_variance` variables are the same rank as the input Tensor, with
+        dimension size 1 in all reduced (non-axis) dimensions).
+    momentum: Momentum for the moving average.
+    epsilon: Small float added to variance to avoid dividing by zero.
+    center: If True, add offset of `beta` to normalized tensor. If False, `beta`
+      is ignored.
+    scale: If True, multiply by `gamma`. If False, `gamma` is
+      not used. When the next layer is linear (also e.g. `nn.relu`), this can be
+      disabled since the scaling can be done by the next layer.
+    beta_initializer: Initializer for the beta weight.
+    gamma_initializer: Initializer for the gamma weight.
+    moving_mean_initializer: Initializer for the moving mean.
+    moving_variance_initializer: Initializer for the moving variance.
+    beta_regularizer: Optional regularizer for the beta weight.
+    gamma_regularizer: Optional regularizer for the gamma weight.
+    beta_constraint: An optional projection function to be applied to the `beta`
+        weight after being updated by an `Optimizer` (e.g. used to implement
+        norm constraints or value constraints for layer weights). The function
+        must take as input the unprojected variable and must return the
+        projected variable (which must have the same shape). Constraints are
+        not safe to use when doing asynchronous distributed training.
+    gamma_constraint: An optional projection function to be applied to the
+        `gamma` weight after being updated by an `Optimizer`.
+    renorm: Whether to use Batch Renormalization
+      (https://arxiv.org/abs/1702.03275). This adds extra variables during
+      training. The inference is the same for either value of this parameter.
+    renorm_clipping: A dictionary that may map keys 'rmax', 'rmin', 'dmax' to
+      scalar `Tensors` used to clip the renorm correction. The correction
+      `(r, d)` is used as `corrected_value = normalized_value * r + d`, with
+      `r` clipped to [rmin, rmax], and `d` to [-dmax, dmax]. Missing rmax, rmin,
+      dmax are set to inf, 0, inf, respectively.
+    renorm_momentum: Momentum used to update the moving means and standard
+      deviations with renorm. Unlike `momentum`, this affects training
+      and should be neither too small (which would add noise) nor too large
+      (which would give stale estimates). Note that `momentum` is still applied
+      to get the means and variances for inference.
+    fused: if `None` or `True`, use a faster, fused implementation if possible.
+      If `False`, use the system recommended implementation.
+    trainable: Boolean, if `True` also add variables to the graph collection
+      `GraphKeys.TRAINABLE_VARIABLES` (see tf.Variable).
+    virtual_batch_size: An `int`. By default, `virtual_batch_size` is `None`,
+      which means batch normalization is performed across the whole batch. When
+      `virtual_batch_size` is not `None`, instead perform "Ghost Batch
+      Normalization", which creates virtual sub-batches which are each
+      normalized separately (with shared gamma, beta, and moving statistics).
+      Must divide the actual batch size during execution.
+    adjustment: A function taking the `Tensor` containing the (dynamic) shape of
+      the input tensor and returning a pair (scale, bias) to apply to the
+      normalized values (before gamma and beta), only during training. For
+      example, if axis==-1,
+        `adjustment = lambda shape: (
+          tf.random_uniform(shape[-1:], 0.93, 1.07),
+          tf.random_uniform(shape[-1:], -0.1, 0.1))`
+      will scale the normalized value by up to 7% up or down, then shift the
+      result by up to 0.1 (with independent scaling and bias for each feature
+      but shared across all examples), and finally apply gamma and/or beta. If
+      `None`, no adjustment is applied. Cannot be specified if
+      virtual_batch_size is specified.
+    name: A string, the name of the layer.
+  """
+
+  def __init__(self,
+               axis=-1,
+               momentum=0.99,
+               epsilon=1e-3,
+               center=True,
+               scale=True,
+               beta_initializer=init_ops.zeros_initializer(),
+               gamma_initializer=init_ops.ones_initializer(),
+               moving_mean_initializer=init_ops.zeros_initializer(),
+               moving_variance_initializer=init_ops.ones_initializer(),
+               beta_regularizer=None,
+               gamma_regularizer=None,
+               beta_constraint=None,
+               gamma_constraint=None,
+               renorm=False,
+               renorm_clipping=None,
+               renorm_momentum=0.99,
+               fused=None,
+               trainable=True,
+               virtual_batch_size=None,
+               adjustment=None,
+               name=None,
+               **kwargs):
+    super(BatchNormalization, self).__init__(
+        axis=axis,
+        momentum=momentum,
+        epsilon=epsilon,
+        center=center,
+        scale=scale,
+        beta_initializer=beta_initializer,
+        gamma_initializer=gamma_initializer,
+        moving_mean_initializer=moving_mean_initializer,
+        moving_variance_initializer=moving_variance_initializer,
+        beta_regularizer=beta_regularizer,
+        gamma_regularizer=gamma_regularizer,
+        beta_constraint=beta_constraint,
+        gamma_constraint=gamma_constraint,
+        renorm=renorm,
+        renorm_clipping=renorm_clipping,
+        renorm_momentum=renorm_momentum,
+        fused=fused,
+        trainable=trainable,
+        virtual_batch_size=virtual_batch_size,
+        adjustment=adjustment,
+        name=name,
+        **kwargs)
+
+  def call(self, inputs, training=False):
+    return super(BatchNormalization, self).call(inputs, training=training)
+
 
 def global_batch_norm(inputs,
                         axis=-1,
@@ -1015,5 +1147,7 @@ def global_batch_norm(inputs,
       trainable=trainable,
       virtual_batch_size=virtual_batch_size,
       adjustment=adjustment,
-      name=name)
+      name=name,
+      _reuse=reuse,
+      _scope=name)
   return layer.apply(inputs, training=training)

@@ -589,6 +589,14 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
     }
   }
 
+  if (response.response_type() == Response::ALLREDUCE) {
+    for (auto& e : entries) {
+      if (IsExecImmOp(e.tensor_name)) {
+        horovod_finish_exec_imm();
+      }
+    }
+  }
+
   Status status;
   try {
 #if DYNAMIC_SCHEDULE
@@ -1204,10 +1212,14 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
   }
 
   while (true) {
-    if (state.get_action_exists) {
-      state.get_action_exists = false;
+    if (horovod_exist_exec_imm_op()) {
+      LOG(TRACE) << "Execute Immediately";
       break;
     }
+
+    start_time = std::chrono::steady_clock::now();
+    sleep_duration = state.last_cycle_start + std::chrono::microseconds(
+        long(state.param_manager.CycleTimeMs() * 1000.)) - start_time;
 
     if (sleep_duration <= std::chrono::steady_clock::duration::zero()) {
       break;
@@ -1620,6 +1632,7 @@ void InitializeHorovodOnce(const int* ranks, int nranks, bool dummy) {
   // Ensure background thread is only started once.
 #if DYNAMIC_SCHEDULE
   horovod_global.dummy = dummy;
+  horovod_global.exec_imm = 0;
   if (!horovod_global.signal_registered) {
     std::signal(SIGINT, CtrlCHandler);
     horovod_global.signal_registered = true;
@@ -1650,6 +1663,24 @@ Status CheckInitialized() {
     return NOT_INITIALIZED_ERROR;
   }
   return Status::OK();
+}
+
+void horovod_exec_imm() {
+  horovod_global.exec_imm++;
+}
+
+void horovod_finish_exec_imm() {
+  horovod_global.exec_imm--;
+}
+
+bool horovod_exist_exec_imm_op() {
+  return horovod_global.exec_imm > 0;
+}
+
+bool IsExecImmOp(const std::string &name) {
+  const std::string exec_imm_str = "ExecImm";
+  return name.size() > exec_imm_str.size() &&
+      name.substr(name.size() - exec_imm_str.size(), exec_imm_str.size()).compare(exec_imm_str) == 0;
 }
 
 extern "C" {
@@ -1685,8 +1716,10 @@ int horovod_get_action() {
     horovod_global.message_queue.push(message);
     LOG(DEBUG, horovod_global.rank) << "Enqueued GETACTION " << name;
   }
-  horovod_global.get_action_exists = true;
-  return syncer.Wait();
+  horovod_exec_imm();
+  auto ret = syncer.Wait();
+  horovod_finish_exec_imm();
+  return ret;
 }
 
 int get_action() {
@@ -1858,6 +1891,10 @@ Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
   horovod_global.tensor_table.emplace(name, std::move(e));
   horovod_global.message_queue.push(message);
   LOG(TRACE, horovod_global.rank) << "Enqueued " << name;
+  // if name starts with ExecImm, mark as execute_immediately
+  if (IsExecImmOp(name)) {
+    horovod_exec_imm();
+  }
   return Status::OK();
 }
 

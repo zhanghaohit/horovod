@@ -19,6 +19,7 @@
 
 #include <queue>
 #include <thread>
+#include <atomic>
 
 #include "fusion_buffer_manager.h"
 #include "parameter_manager.h"
@@ -126,7 +127,7 @@ struct HorovodGlobalState {
 
 #if DYNAMIC_SCHEDULE
   bool dummy = false;
-  volatile bool get_action_exists = false;
+  std::atomic<int> exec_imm;
   volatile bool signal_registered = false;
 #endif
 
