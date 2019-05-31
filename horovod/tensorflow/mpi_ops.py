@@ -324,6 +324,7 @@ class BatchNormalizationImpl(Layer):
                virtual_batch_size=None,
                adjustment=None,
                name=None,
+               sync=False,
                **kwargs):
     super(BatchNormalizationImpl, self).__init__(
         name=name, trainable=trainable, **kwargs)
@@ -357,6 +358,7 @@ class BatchNormalizationImpl(Layer):
 
     self.fused = fused
     self._bessels_correction_test_only = True
+    self.sync = sync
 
     if renorm:
       renorm_clipping = renorm_clipping or {}
@@ -753,12 +755,14 @@ class BatchNormalizationImpl(Layer):
       keep_dims = self.virtual_batch_size is not None or len(self.axis) > 1
 
       # NOTE(hzhang): sync the mean and variance
-      # mean, variance = nn.moments(inputs, reduction_axes, keep_dims=keep_dims)
-      mean = tf.reduce_mean(inputs, reduction_axes, keepdims=keep_dims)
-      mean_square = tf.reduce_mean(tf.square(inputs), reduction_axes, keepdims=keep_dims)
-      mean = tf.div(_allreduce(mean, exec_imm=True), tf.cast(rank_size(), dtype=inputs.dtype))
-      mean_square = tf.div(_allreduce(mean_square, exec_imm=True), tf.cast(rank_size(), dtype=inputs.dtype))
-      variance = mean_square - tf.square(mean)
+      if self.sync is True:
+        mean = tf.reduce_mean(inputs, reduction_axes, keepdims=keep_dims)
+        mean_square = tf.reduce_mean(tf.square(inputs), reduction_axes, keepdims=keep_dims)
+        mean = tf.div(_allreduce(mean, exec_imm=True), tf.cast(rank_size(), dtype=inputs.dtype))
+        mean_square = tf.div(_allreduce(mean_square, exec_imm=True), tf.cast(rank_size(), dtype=inputs.dtype))
+        variance = mean_square - tf.square(mean)
+      else:
+        mean, variance = nn.moments(inputs, reduction_axes, keep_dims=keep_dims)
       # end of sync bn
 
       moving_mean = self.moving_mean
@@ -1022,7 +1026,8 @@ def global_batch_norm(inputs,
                         renorm_momentum=0.99,
                         fused=None,
                         virtual_batch_size=None,
-                        adjustment=None):
+                        adjustment=None,
+                        sync=False):
   """Functional interface for the batch normalization layer.
 
   Reference: http://arxiv.org/abs/1502.03167
@@ -1148,6 +1153,9 @@ def global_batch_norm(inputs,
       virtual_batch_size=virtual_batch_size,
       adjustment=adjustment,
       name=name,
+      sync=sync,
       _reuse=reuse,
       _scope=name)
   return layer.apply(inputs, training=training)
+
+tf.layers.batch_normalization = global_batch_norm
