@@ -53,6 +53,9 @@ from horovod.common import get_ext_suffix
 from horovod.common import HorovodBasics as _HorovodBasics
 from horovod.tensorflow.util import _executing_eagerly
 
+import os
+import sys
+
 
 def _load_library(name, op_list=None):
     """Loads a .so file containing the specified operators.
@@ -1163,4 +1166,12 @@ def sync_batch_norm(inputs, **kwargs):
     return global_batch_norm(inputs, sync=True, **kwargs)
 
 
-tf.layers.batch_normalization = global_batch_norm
+sync_bn = os.environ.get('AUTOBOT_SYNC_BN')
+if sync_bn and sync_bn == '1':
+    tf.layers.batch_normalization = sync_batch_norm
+    print("*****Use SYNC BN*****")
+    sys.stdout.flush()
+else:
+    tf.layers.batch_normalization = global_batch_norm
+    print("*****Use Standard BN*****")
+    sys.stdout.flush()
