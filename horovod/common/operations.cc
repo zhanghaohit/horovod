@@ -589,6 +589,7 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
     }
   }
 
+#if DYNAMIC_SCHEDULE
   if (response.response_type() == Response::ALLREDUCE) {
     for (auto& e : entries) {
       if (IsExecImmOp(e.tensor_name)) {
@@ -596,6 +597,7 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
       }
     }
   }
+#endif
 
   Status status;
   try {
@@ -1665,6 +1667,7 @@ Status CheckInitialized() {
   return Status::OK();
 }
 
+#if DYNAMIC_SCHEDULE
 void horovod_exec_imm() {
   horovod_global.exec_imm++;
 }
@@ -1682,6 +1685,7 @@ bool IsExecImmOp(const std::string &name) {
   return name.size() > exec_imm_str.size() &&
       name.substr(name.size() - exec_imm_str.size(), exec_imm_str.size()).compare(exec_imm_str) == 0;
 }
+#endif
 
 extern "C" {
 
@@ -1891,10 +1895,12 @@ Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
   horovod_global.tensor_table.emplace(name, std::move(e));
   horovod_global.message_queue.push(message);
   LOG(TRACE, horovod_global.rank) << "Enqueued " << name;
+#if DYNAMIC_SCHEDULE
   // if name starts with ExecImm, mark as execute_immediately
   if (IsExecImmOp(name)) {
     horovod_exec_imm();
   }
+#endif
   return Status::OK();
 }
 

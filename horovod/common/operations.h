@@ -43,11 +43,12 @@ namespace common {
 #define HOROVOD_HIERARCHICAL_ALLREDUCE "HOROVOD_HIERARCHICAL_ALLREDUCE"
 #define HOROVOD_HIERARCHICAL_ALLGATHER "HOROVOD_HIERARCHICAL_ALLGATHER"
 
-
+#if DYNAMIC_SCHEDULE
 void horovod_finish_exec_imm();
 bool horovod_exist_exec_imm_op();
 bool IsExecImmOp(const std::string &name);
 void horovod_exec_imm();
+#endif
 
 // Check that Horovod is initialized.
 Status CheckInitialized();

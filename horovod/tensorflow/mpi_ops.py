@@ -1158,4 +1158,9 @@ def global_batch_norm(inputs,
       _scope=name)
   return layer.apply(inputs, training=training)
 
+
+def sync_batch_norm(inputs, **kwargs):
+    return global_batch_norm(inputs, sync=True, **kwargs)
+
+
 tf.layers.batch_normalization = global_batch_norm
