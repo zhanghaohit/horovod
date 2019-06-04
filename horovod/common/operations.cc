@@ -1023,6 +1023,23 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
                                        true);
   }
 
+#ifdef DYNAMIC_SCHEDULE
+  state.mini_cycle_time = std::chrono::microseconds(100);
+  auto horovod_mini_cycle_time = std::getenv("HOROVOD_MINI_CYCLE_TIME");
+  if (horovod_mini_cycle_time != nullptr) {
+    state.mini_cycle_time = std::chrono::microseconds(
+        long(std::strtof(horovod_mini_cycle_time, nullptr) * 1000.));
+  }
+
+  state.get_action_cycle_time = std::chrono::microseconds(1000000);
+  auto get_action_cycle_time = std::getenv("AUTOBOT_GET_ACTION_CYCLE_TIME");
+  if (get_action_cycle_time != nullptr) {
+    state.get_action_cycle_time = std::chrono::microseconds(
+        long(std::strtof(get_action_cycle_time, nullptr) * 1000000.));
+  }
+
+#endif
+
   // Set flag for hierarchical allgather. Ignore if Horovod is running on a
   // single node.
   auto horovod_hierarchical_allgather =
@@ -1206,13 +1223,6 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
       long(state.param_manager.CycleTimeMs() * 1000.)) - start_time;
 
 #if DYNAMIC_SCHEDULE
-  auto mini_sleep_duration = std::chrono::microseconds(100);
-  auto horovod_mini_cycle_time = std::getenv("HOROVOD_MINI_CYCLE_TIME");
-  if (horovod_mini_cycle_time != nullptr) {
-    float mini_cycle_time = std::strtof(horovod_mini_cycle_time, nullptr);
-    mini_sleep_duration = std::chrono::microseconds(long(mini_cycle_time * 1000.));
-  }
-
   while (true) {
     if (horovod_exist_exec_imm_op()) {
       LOG(TRACE) << "Execute Immediately";
@@ -1222,6 +1232,8 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     start_time = std::chrono::steady_clock::now();
     sleep_duration = state.last_cycle_start + std::chrono::microseconds(
         long(state.param_manager.CycleTimeMs() * 1000.)) - start_time;
+
+    auto mini_sleep_duration = state.mini_cycle_time;
 
     if (sleep_duration <= std::chrono::steady_clock::duration::zero()) {
       break;
@@ -1739,7 +1751,17 @@ int get_action() {
 
   ActionReply reply;
   if (horovod_global.rank == 0) {
-    reply = ctl_client->GetAction();
+    auto start_time = std::chrono::steady_clock::now();
+    auto duration = horovod_global.last_get_action_start + horovod_global.get_action_cycle_time
+        - start_time;
+
+    if (duration > std::chrono::steady_clock::duration::zero()) {
+      LOG(DEBUG) << "set DO_NOTHING directly without communicate with central controller";
+      reply.set_action(DO_NOTHING);
+    } else {
+      reply = ctl_client->GetAction();
+      horovod_global.last_get_action_start = std::chrono::steady_clock::now();
+    }
 
     string buf;
     reply.SerializeToString(&buf);

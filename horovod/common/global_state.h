@@ -20,6 +20,7 @@
 #include <queue>
 #include <thread>
 #include <atomic>
+#include <chrono>
 
 #include "fusion_buffer_manager.h"
 #include "parameter_manager.h"
@@ -129,6 +130,11 @@ struct HorovodGlobalState {
   bool dummy = false;
   std::atomic<int> exec_imm;
   volatile bool signal_registered = false;
+
+  // Time point when last get_action performed.
+  std::chrono::steady_clock::time_point last_get_action_start;
+  std::chrono::microseconds mini_cycle_time;
+  std::chrono::microseconds get_action_cycle_time;
 #endif
 
   ~HorovodGlobalState() {
