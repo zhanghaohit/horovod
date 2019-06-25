@@ -496,7 +496,13 @@ int64_t TensorFusionThresholdBytes() {
     // Ensuring that fusion buffer can hold a number of elements divisible by
     // FUSION_BUFFER_ATOMIC_UNIT for performance
     int mpi_double_size;
-    MPI_Type_size(MPI_DOUBLE, &mpi_double_size);
+
+    #if DYNAMIC_SCHEDULE
+      mpi_double_size = HorovodOp::GetSizeof(HOROVOD_FLOAT64);
+    #else
+      MPI_Type_size(MPI_DOUBLE, &mpi_double_size);
+    #endif
+
     int64_t div =
         horovod_global.local_size * mpi_double_size * FUSION_BUFFER_ATOMIC_UNIT;
     return ((proposed_fusion_threshold + div - 1) / div) * div;
