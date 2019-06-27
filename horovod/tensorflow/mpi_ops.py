@@ -331,6 +331,20 @@ class BatchNormalizationImpl(Layer):
                **kwargs):
     super(BatchNormalizationImpl, self).__init__(
         name=name, trainable=trainable, **kwargs)
+
+    sync_bn = os.environ.get('AUTOBOT_SYNC_BN')
+    if sync_bn and sync_bn == '1':
+        sync=True
+        logging.debug("*****AUTOBOT_SYNC_BN is set*****")
+        sys.stdout.flush()
+
+    if sync is True:
+        logging.debug("*****Use SYNC BN*****")
+        sys.stdout.flush()
+    else:
+        logging.debug("*****Use Standard BN*****")
+        sys.stdout.flush()
+
     if isinstance(axis, list):
       self.axis = axis[:]
     else:
@@ -352,10 +366,12 @@ class BatchNormalizationImpl(Layer):
     self.virtual_batch_size = virtual_batch_size
     self.adjustment = adjustment
     # NOTE(hzhang): does not support fuse
-    # if fused is None:
-    #   fused = True
-    if fused is True:
-        raise ValueError('Fused batch norm is not supported for sync BN')
+    if fused is None:
+      fused = True
+
+    if sync is True:
+        fused = False
+        logging.info('Disabled FusedBn if SyncBN is enabled')
 
     self.supports_masking = True
 
@@ -1166,12 +1182,4 @@ def sync_batch_norm(inputs, **kwargs):
     return global_batch_norm(inputs, sync=True, **kwargs)
 
 
-sync_bn = os.environ.get('AUTOBOT_SYNC_BN')
-if sync_bn and sync_bn == '1':
-    tf.layers.batch_normalization = sync_batch_norm
-    print("*****Use SYNC BN*****")
-    sys.stdout.flush()
-else:
-    tf.layers.batch_normalization = global_batch_norm
-    print("*****Use Standard BN*****")
-    sys.stdout.flush()
+tf.layers.batch_normalization = global_batch_norm
