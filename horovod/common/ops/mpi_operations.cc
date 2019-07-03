@@ -23,6 +23,7 @@ namespace common {
 MPIAllreduce::MPIAllreduce(MPIContext* mpi_context, HorovodGlobalState* global_state)
     : AllreduceOp(global_state), mpi_context_(mpi_context) {}
 
+#ifndef DYNAMIC_SCHEDULE
 Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   LOG(DEBUG) << "MPIAllReduce";
   auto& first_entry = entries[0];
@@ -66,6 +67,7 @@ Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Respo
 
   return Status::OK();
 }
+#endif
 
 bool MPIAllreduce::Enabled(const ParameterManager& param_manager,
                            const std::vector<TensorTableEntry>& entries,

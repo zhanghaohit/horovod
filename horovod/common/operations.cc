@@ -33,11 +33,9 @@
 #include "hashes.h"
 #include "global_state.h"
 #include "fusion_buffer_manager.h"
-#include "mpi.h"
 #include "message.h"
 #include "mpi_context.h"
 #include "operations.h"
-#include "ops/mpi_operations.h"
 #include "ops/operation_manager.h"
 #include "parameter_manager.h"
 #include "timeline.h"
@@ -47,6 +45,9 @@
 #if DYNAMIC_SCHEDULE
 #include "controller_client.h"
 #include "ops/socket_operations.h"
+#else
+#include "mpi.h"
+#include "ops/mpi_operations.h"
 #endif
 
 #if HAVE_CUDA
@@ -990,11 +991,6 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   state.mpi_threads_supported = (provided == MPI_THREAD_MULTIPLE);
   state.local_comm_ranks = local_comm_ranks;
 #else
-  ctx.local_comm = MPI_COMM_NULL;
-  ctx.cross_comm = MPI_COMM_NULL;
-  ctx.mpi_comm = MPI_COMM_NULL;
-  ctx.mpi_float16_t = MPI_DATATYPE_NULL;
-  ctx.mpi_float16_sum = MPI_OP_NULL;
   state.mpi_threads_supported = true;
 #endif
 
@@ -1147,10 +1143,13 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   }
 
   if (horovod_global.shared_buffer != nullptr) {
+#ifndef DYNAMIC_SCHEDULE
     MPI_Win_free(&ctx.window);
+#endif
     horovod_global.shared_buffer = nullptr;
   }
 
+#ifndef DYNAMIC_SCHEDULE
   if (ctx.mpi_comm != MPI_COMM_NULL &&
       ctx.mpi_comm != MPI_COMM_WORLD) {
     MPI_Comm_free(&ctx.mpi_comm);
@@ -1171,6 +1170,7 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
   if (ctx.mpi_float16_sum != MPI_OP_NULL) {
     MPI_Op_free(&ctx.mpi_float16_sum);
   }
+#endif
 
   horovod_global.param_manager.FreeMpiTypes();
 
@@ -1184,11 +1184,13 @@ void BackgroundThreadLoop(HorovodGlobalState& state, MPIContext& ctx) {
     // ddl_finalize calls MPI_Finalize
     ddl_finalize();
 #else
+#ifndef DYNAMIC_SCHEDULE
     int is_mpi_finalized = 0;
     MPI_Finalized(&is_mpi_finalized);
     if (!is_mpi_finalized) {
       MPI_Finalize();
     }
+#endif
 #endif
   }
 }
@@ -1825,10 +1827,12 @@ void horovod_init(const int* ranks, int nranks, bool dummy) {
   InitializeHorovodOnce(ranks, nranks, dummy);
 }
 
+#ifndef DYNAMIC_SCHEDULE
 void horovod_init_comm(MPI_Comm comm, bool dummy) {
   MPI_Comm_dup(comm, &(mpi_context.mpi_comm));
   InitializeHorovodOnce(NULL, 0, dummy);
 }
+#endif
 
 void horovod_shutdown() {
   LOG(INFO, horovod_global.rank) << "Shutdown horovod";

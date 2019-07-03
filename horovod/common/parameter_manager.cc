@@ -20,7 +20,9 @@
 #include <cmath>
 #include <limits>
 
+#ifndef DYNAMIC_SCHEDULE
 #include "mpi.h"
+#endif
 
 namespace horovod {
 namespace common {
