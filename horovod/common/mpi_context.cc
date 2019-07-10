@@ -20,6 +20,7 @@
 namespace horovod {
 namespace common {
 
+#ifndef DYNAMIC_SCHEDULE
 MPI_Datatype MPIContext::GetMPIDataType(const std::shared_ptr<Tensor> tensor) {
   return GetMPIDataType(tensor->dtype());
 }
@@ -71,6 +72,7 @@ MPI_Comm MPIContext::GetMPICommunicator(Communicator comm) {
                              " is not supported in MPI mode.");
   }
 }
+#endif
 
 int MPIContext::GetMPITypeSize(DataType dtype) {
 #if DYNAMIC_SCHEDULE

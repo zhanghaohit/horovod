@@ -25,9 +25,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "mpi.h"
 #if DYNAMIC_SCHEDULE
 #include "net.h"
+#else
+#include "mpi.h"
 #endif
 
 #include <Eigen/Core>
@@ -242,10 +243,10 @@ private:
     bool active;
   };
 
-  MPI_Datatype mpi_params_type_;
 #if DYNAMIC_SCHEDULE
   SocketCommunicator *comm_ = nullptr;
 #else
+  MPI_Datatype mpi_params_type_;
   MPI_Comm mpi_comm_;
 #endif
 };

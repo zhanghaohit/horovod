@@ -20,7 +20,9 @@
 
 #include "common.h"
 #define OMPI_SKIP_MPICXX
+#ifndef DYNAMIC_SCHEDULE
 #include "mpi.h"
+#endif
 
 namespace horovod {
 namespace common {
@@ -61,7 +63,9 @@ int get_action();
 void horovod_init(const int *ranks, int nranks, bool dummy);
 
 // C interface to initialize Horovod with the given MPI communicator.
+#ifndef DYNAMIC_SCHEDULE
 void horovod_init_comm(MPI_Comm comm, bool dummy);
+#endif
 
 // C interface to shut down Horovod.
 void horovod_shutdown();

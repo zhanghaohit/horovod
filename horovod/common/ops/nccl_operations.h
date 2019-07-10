@@ -79,7 +79,9 @@ public:
   NCCLHierarchicalAllreduce(NCCLContext* nccl_context, MPIContext* mpi_context,
                             CUDAContext* cuda_context, HorovodGlobalState* global_state);
 
+#ifndef DYNAMIC_SCHEDULE
   Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
+#endif
 
   bool Enabled(const ParameterManager& param_manager,
                const std::vector<TensorTableEntry>& entries,

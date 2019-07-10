@@ -18,13 +18,17 @@
 #define HOROVOD_MPI_CONTEXT_H
 
 #include "common.h"
-#include "mpi.h"
 #include "net.h"
+
+#ifndef DYNAMIC_SCHEDULE
+#include "mpi.h"
+#endif
 
 namespace horovod {
 namespace common {
 
 struct MPIContext {
+#ifndef DYNAMIC_SCHEDULE
   MPI_Datatype GetMPIDataType(std::shared_ptr<Tensor> tensor);
 
   MPI_Datatype GetMPIDataType(DataType dtype);
@@ -32,9 +36,11 @@ struct MPIContext {
   MPI_Op GetMPISumOp(DataType dtype);
 
   MPI_Comm GetMPICommunicator(Communicator comm);
+#endif
 
   int GetMPITypeSize(DataType dtype);
 
+#ifndef DYNAMIC_SCHEDULE
   // MPI custom data type for float16.
   MPI_Datatype mpi_float16_t;
   MPI_Op mpi_float16_sum;
@@ -51,6 +57,7 @@ struct MPIContext {
 
   // MPI Window used for shared memory allgather
   MPI_Win window;
+#endif
 };
 
 struct SocketContext {

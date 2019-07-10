@@ -28,8 +28,11 @@
 
 #include <stdint.h>
 
-#define OMPI_SKIP_MPICXX
+#ifndef DYNAMIC_SCHEDULE
 #include "mpi.h"
+#endif
+
+#define OMPI_SKIP_MPICXX
 
 namespace horovod {
 namespace common {
@@ -132,7 +135,11 @@ inline void Float2HalfBits(float* src, unsigned short* dest) {
   *dest = u;
 }
 
+#ifdef DYNAMIC_SCHEDULE
+void float16_sum(void* invec, void* inoutvec, int* len);
+#else
 void float16_sum(void* invec, void* inoutvec, int* len, MPI_Datatype* datatype);
+#endif
 
 } // namespace common
 } // namespace horovod

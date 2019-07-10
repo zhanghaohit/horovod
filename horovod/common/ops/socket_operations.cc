@@ -164,7 +164,11 @@ Status SocketAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Re
     if (dtype == HOROVOD_FLOAT16) {
       memcpy(res, a, size);
       int num = size / GetSizeof(dtype);
+#ifdef DYNAMIC_SCHEDULE
+      float16_sum(const_cast<void*>(b), res, &num);  // b will not be modified
+#else
       float16_sum(const_cast<void*>(b), res, &num, nullptr);  // b will not be modified
+#endif
     } else {
       for (int i = 0; i < size / GetSizeof(dtype); i++) {
         switch (dtype) {

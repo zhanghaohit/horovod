@@ -562,7 +562,6 @@ def get_common_options(build_ext):
                'horovod/common/parameter_manager.cc',
                'horovod/common/timeline.cc',
                'horovod/common/ops/collective_operations.cc',
-               'horovod/common/ops/mpi_operations.cc',
                'horovod/common/ops/operation_manager.cc',
                'horovod/common/optim/bayesian_optimization.cc',
                'horovod/common/optim/gaussian_process.cc',
@@ -580,8 +579,9 @@ def get_common_options(build_ext):
     if have_cuda:
         MACROS += [('HAVE_CUDA', '1')]
         INCLUDES += cuda_include_dirs
-        SOURCES += ['horovod/common/ops/cuda_operations.cc',
-                    'horovod/common/ops/mpi_cuda_operations.cc']
+        SOURCES += ['horovod/common/ops/cuda_operations.cc']
+        if dynamic_schedule != '1':
+            SOURCES += ['horovod/common/ops/mpi_cuda_operations.cc']
         LIBRARY_DIRS += cuda_lib_dirs
         LIBRARIES += ['cudart']
 
@@ -611,11 +611,14 @@ def get_common_options(build_ext):
     if dynamic_schedule:
         MACROS += [('DYNAMIC_SCHEDULE', '1')]
         # LIBRARIES += ['libprotobuf.a', 'libgrpc++.a', 'libgrpc.a']
-        grpc_lib_dir = os.environ.get('GRPC_LIB_HOME')
-        if not grpc_lib_dir:
-            raise DistutilsError('GRPC_LIB_HOME is not configured')
+    else:
+        SOURCES += ['horovod/common/ops/mpi_operations.cc']
 
-        EXTRA_OBJECTS = [grpc_lib_dir + '/lib' + lib + '.a' for lib in ['protobuf', 'grpc++', 'grpc']]
+    grpc_lib_dir = os.environ.get('GRPC_LIB_HOME')
+    if not grpc_lib_dir:
+        raise DistutilsError('GRPC_LIB_HOME is not configured')
+
+    EXTRA_OBJECTS = [grpc_lib_dir + '/lib' + lib + '.a' for lib in ['protobuf', 'grpc++', 'grpc']]
 
     use_timer = os.environ.get('HOROVOD_USE_TIMER')
     if use_timer:

@@ -134,16 +134,19 @@ void NCCLOp::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
 
 #if DYNAMIC_SCHEDULE
     int bcast_op = net_context_->comm.Bcast(&nccl_id, sizeof(nccl_id));
+    if (bcast_op != 0) {
+      throw std::logic_error("Broadcast failed, see output for details.");
+    }
 #else
     int bcast_op = MPI_Bcast((void*) &nccl_id,
                              sizeof(nccl_id),
                              mpi_context_->GetMPIDataType(HOROVOD_BYTE),
                              0,
                              mpi_context_->GetMPICommunicator(nccl_id_bcast_comm));
-#endif
     if (bcast_op != MPI_SUCCESS) {
       throw std::logic_error("MPI_Broadcast failed, see MPI output for details.");
     }
+#endif
 
     ncclComm_t new_nccl_comm;
     auto nccl_result = ncclCommInitRank(&new_nccl_comm, nccl_size, nccl_id, nccl_rank);
@@ -154,12 +157,15 @@ void NCCLOp::InitNCCLComm(const std::vector<TensorTableEntry>& entries,
     // deadlock that we've been seeing without it.
 #if DYNAMIC_SCHEDULE
     int barrier_op = net_context_->comm.Barrier();
+    if (barrier_op != 0) {
+      throw std::logic_error("Barrier failed, see output for details.");
+    }
 #else
     int barrier_op = MPI_Barrier(mpi_context_->GetMPICommunicator(Communicator::GLOBAL));
-#endif
     if (barrier_op != MPI_SUCCESS) {
       throw std::logic_error("MPI_Barrier failed, see MPI output for details.");
     }
+#endif
 
     timeline.ActivityEndAll(entries);
 
@@ -219,6 +225,7 @@ NCCLHierarchicalAllreduce::NCCLHierarchicalAllreduce(NCCLContext* nccl_context, 
     : NCCLAllreduce(nccl_context, mpi_context, nullptr,
                     cuda_context, global_state) {}
 
+#ifndef DYNAMIC_SCHEDULE
 Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   LOG(DEBUG) << "NCCL_HIERARCHICAL_ALLREDUCE";
   auto& first_entry = entries[0];
@@ -417,6 +424,7 @@ Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries
 
   return FinalizeCUDAQueue(entries);
 }
+#endif
 
 bool NCCLHierarchicalAllreduce::Enabled(const ParameterManager& param_manager,
                                         const std::vector<TensorTableEntry>& entries,

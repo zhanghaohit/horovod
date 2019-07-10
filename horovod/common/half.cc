@@ -40,8 +40,11 @@ bool is_avx_and_f16c() {
 #endif
 
 // float16 custom data type summation operation.
-void float16_sum(void* invec, void* inoutvec, int* len,
-                 MPI_Datatype* datatype) {
+#ifdef DYNAMIC_SCHEDULE
+void float16_sum(void* invec, void* inoutvec, int* len) {
+#else
+void float16_sum(void* invec, void* inoutvec, int* len, MPI_Datatype* datatype) {
+#endif
   // cast invec and inoutvec to your float16 type
   auto* in = (unsigned short*)invec;
   auto* inout = (unsigned short*)inoutvec;
