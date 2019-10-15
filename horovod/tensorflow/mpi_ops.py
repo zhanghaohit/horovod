@@ -104,12 +104,12 @@ def _normalize_name(name):
     return re.sub('[^a-zA-Z0-9_]', '_', name)
 
 
-# @function.Defun()
+@function.Defun()
 def rank_size():
-    # return size()
-    ret = tf.py_func(size, [], tf.int64)
-    ret.set_shape([1])
-    return ret
+    return size()
+    # ret = tf.py_func(size, [], tf.int64)
+    # ret.set_shape([1])
+    # return ret
 
 
 def _allreduce(tensor, name=None, exec_imm=False):

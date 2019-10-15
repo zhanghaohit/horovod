@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <chrono>
 #include <mutex>
+#include <functional>
 #include "logging.h"
 
 namespace horovod {
