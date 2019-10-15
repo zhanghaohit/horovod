@@ -237,7 +237,7 @@ bool IncrementTensorCount(std::unique_ptr<MessageTable>& message_table,
         size = iter->second.ranks.size() + 1;
       }
     } else {
-      LOG(DEBUG) << name << " not exists in the current tensor table";
+      LOG(DEBUG, horovod_global.rank) << name << " not exists in the current tensor table";
     }
   }
   bool ready_to_reduce = count == size;
@@ -330,7 +330,7 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
   // If we are doing an allgather, make sure all but the first dimension are
   // the same. The first dimension may be different and the output tensor is
   // the sum of the first dimension. Collect the sizes by rank.
-  std::vector<int64_t> tensor_sizes(requests.size());
+  std::unordered_map<int, int64_t> tensor_sizes;
   if (message_type == Request::ALLGATHER) {
     TensorShape tensor_shape;
     for (auto dim : requests[0].tensor_shape()) {
@@ -427,9 +427,10 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
       break;
     }
   }
+
   std::vector<int32_t> devices(requests.size());
   for (auto& request : requests) {
-    devices[request.request_rank()] = request.device();
+    devices.push_back(request.device());
   }
 
   Response response;
@@ -440,8 +441,8 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
     response.set_error_message(error_message);
   } else if (message_type == Request::ALLGATHER) {
     response.set_response_type(Response::ALLGATHER);
-    for (auto dim : tensor_sizes) {
-      response.add_tensor_size(dim);
+    for (int i = 0; i < tensor_sizes.size(); i++) {
+      response.add_tensor_size(tensor_sizes[i]);
     }
   } else if (message_type == Request::ALLREDUCE) {
     response.set_response_type(Response::ALLREDUCE);
@@ -526,7 +527,7 @@ void PerformOperation(TensorTable& tensor_table, Response response) {
       // We may fail at finding this key in the tensor table.
       // as broadcast may only target to a subset of ranks
       if (iter == tensor_table.end()) {
-        LOG(WARNING) << "tensor " << name << " not found";
+        LOG(DEBUG, horovod_global.rank) << "tensor " << name << " not found";
         assert(response.response_type() == Response::BROADCAST);
         continue;
       }
@@ -1355,6 +1356,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
         bool reduce = IncrementTensorCount(state.message_table,
                                            received_message, state.size, state.tensor_table);
         if (reduce) {
+          LOG(DEBUG, state.rank) << "Ready to reduce " << received_name;
           ready_to_reduce.push_back(received_name);
         }
       }
@@ -1377,6 +1379,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
     // before doing each reduction.
     std::deque<Response> responses;
     for (auto& tensor_name : ready_to_reduce) {
+      LOG(DEBUG, horovod_global.rank) << "Ready to reduce " << tensor_name;
       Response response =
           ConstructResponse(state.message_table, tensor_name);
       responses.push_back(std::move(response));
