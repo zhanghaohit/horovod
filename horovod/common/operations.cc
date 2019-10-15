@@ -330,7 +330,7 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
   // If we are doing an allgather, make sure all but the first dimension are
   // the same. The first dimension may be different and the output tensor is
   // the sum of the first dimension. Collect the sizes by rank.
-  std::unordered_map<int, int64_t> tensor_sizes;
+  std::map<int32_t, int64_t> tensor_sizes;
   if (message_type == Request::ALLGATHER) {
     TensorShape tensor_shape;
     for (auto dim : requests[0].tensor_shape()) {
@@ -428,9 +428,13 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
     }
   }
 
-  std::vector<int32_t> devices(requests.size());
+  std::map<int32_t, int32_t> devices_map;
   for (auto& request : requests) {
-    devices.push_back(request.device());
+    devices_map[request.request_rank()] = request.device();
+  }
+  std::vector<int32_t> devices;
+  for (auto const &it : devices_map) {
+    devices.push_back(it.second);
   }
 
   Response response;
@@ -441,8 +445,8 @@ Response ConstructResponse(std::unique_ptr<MessageTable>& message_table,
     response.set_error_message(error_message);
   } else if (message_type == Request::ALLGATHER) {
     response.set_response_type(Response::ALLGATHER);
-    for (int i = 0; i < tensor_sizes.size(); i++) {
-      response.add_tensor_size(tensor_sizes[i]);
+    for (auto const &size : tensor_sizes) {
+      response.add_tensor_size(size.second);
     }
   } else if (message_type == Request::ALLREDUCE) {
     response.set_response_type(Response::ALLREDUCE);
